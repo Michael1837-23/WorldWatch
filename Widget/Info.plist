@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+<key>CFBundleExecutable</key><string>WorldWatchWidget</string>
+<key>CFBundleIdentifier</key><string>local.michael.worldwatch.widget</string>
+<key>CFBundleDisplayName</key><string>世界动态</string>
+<key>CFBundleName</key><string>WorldWatchWidget</string>
+<key>CFBundlePackageType</key><string>XPC!</string>
+<key>CFBundleVersion</key><string>6</string>
+<key>CFBundleShortVersionString</key><string>2.3</string>
+<key>CFBundleSupportedPlatforms</key><array><string>MacOSX</string></array>
+<key>LSMinimumSystemVersion</key><string>26.0</string>
+<key>WorldWatchAppGroup</key><string>$(DEVELOPMENT_TEAM).local.michael.worldwatch</string>
+<key>NSExtension</key><dict>
+<key>NSExtensionPointIdentifier</key><string>com.apple.widgetkit-extension</string>
+</dict>
+</dict></plist>

@@ -1,0 +1,357 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 56;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		26D02D6FA8718473153D55DD /* Sources/Main.swift in Sources */ = {isa = PBXBuildFile; fileRef = 6185E5E3CBE8CAE938D4BBDB /* Sources/Main.swift */; };
+		2B6F95DC2E644C68FAD9BDF1 /* Sources/TitleTranslation.swift in Sources */ = {isa = PBXBuildFile; fileRef = 29E513848D0A091475AA8881 /* Sources/TitleTranslation.swift */; };
+		61384AF44E0744B119575A58 /* Sources/Feed.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0919673DCA7150AD018ADE99 /* Sources/Feed.swift */; };
+		75F55193F40ACB5988FAECEC /* Sources/Feed.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0919673DCA7150AD018ADE99 /* Sources/Feed.swift */; };
+		9F96913EF4AF09C832EC4AB2 /* Sources/TitleTranslation.swift in Sources */ = {isa = PBXBuildFile; fileRef = 29E513848D0A091475AA8881 /* Sources/TitleTranslation.swift */; };
+		BD1D448A0FE4BBAB9AF603C2 /* Widget/WorldWatchWidget.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0EA25E3A1CC48DA83094F662 /* Widget/WorldWatchWidget.swift */; };
+		E374912D207EC189E588ECA7 /* WorldWatchWidget.appex in Embed App Extensions */ = {isa = PBXBuildFile; fileRef = BE4175710B03A81B1E49027A /* WorldWatchWidget.appex */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
+/* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		01E77404E10F254C43E64C55 /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = 244210E48437B6556980A702 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 2F8A7BAD25491C26655C51D8;
+			remoteInfo = WorldWatchWidget;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		D01B6655FA0C346D45AAD2BD /* Embed App Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 13;
+			files = (
+				E374912D207EC189E588ECA7 /* WorldWatchWidget.appex in Embed App Extensions */,
+			);
+			name = "Embed App Extensions";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
+
+/* Begin PBXFileReference section */
+		0919673DCA7150AD018ADE99 /* Sources/Feed.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/Feed.swift; sourceTree = "<group>"; };
+		0EA25E3A1CC48DA83094F662 /* Widget/WorldWatchWidget.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Widget/WorldWatchWidget.swift; sourceTree = "<group>"; };
+		1B44CA67D626DB2261D91DC7 /* Widget/Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Widget/Info.plist; sourceTree = "<group>"; };
+		29E513848D0A091475AA8881 /* Sources/TitleTranslation.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/TitleTranslation.swift; sourceTree = "<group>"; };
+		6185E5E3CBE8CAE938D4BBDB /* Sources/Main.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/Main.swift; sourceTree = "<group>"; };
+		681C948D238C526E9E3424E0 /* 世界动态.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "世界动态.app"; sourceTree = BUILT_PRODUCTS_DIR; };
+		732EEBB2D95E04931E101BD8 /* Config/AppInfo.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Config/AppInfo.plist; sourceTree = "<group>"; };
+		B41E5772E2D15458F0E4579D /* Widget/Widget.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = Widget/Widget.entitlements; sourceTree = "<group>"; };
+		BE4175710B03A81B1E49027A /* WorldWatchWidget.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = WorldWatchWidget.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		7A4C2DC8FCA657188648E999 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		D9AF7A2C9C00EE2259091EC5 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		0A3E27B8CA818264D75C8D81 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				681C948D238C526E9E3424E0 /* 世界动态.app */,
+				BE4175710B03A81B1E49027A /* WorldWatchWidget.appex */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		19F479106CE8C3BA8C106518 = {
+			isa = PBXGroup;
+			children = (
+				0919673DCA7150AD018ADE99 /* Sources/Feed.swift */,
+				29E513848D0A091475AA8881 /* Sources/TitleTranslation.swift */,
+				6185E5E3CBE8CAE938D4BBDB /* Sources/Main.swift */,
+				0EA25E3A1CC48DA83094F662 /* Widget/WorldWatchWidget.swift */,
+				732EEBB2D95E04931E101BD8 /* Config/AppInfo.plist */,
+				1B44CA67D626DB2261D91DC7 /* Widget/Info.plist */,
+				B41E5772E2D15458F0E4579D /* Widget/Widget.entitlements */,
+				0A3E27B8CA818264D75C8D81 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		2F8A7BAD25491C26655C51D8 /* WorldWatchWidget */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 51BC20E9DD6DE5280A769B0F /* Build configuration list for PBXNativeTarget "WorldWatchWidget" */;
+			buildPhases = (
+				3747A985C09D6E91C4EDA618 /* Sources */,
+				D9AF7A2C9C00EE2259091EC5 /* Frameworks */,
+				3DBCC61D731C18BF7451FB4B /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = WorldWatchWidget;
+			productName = WorldWatchWidget;
+			productReference = BE4175710B03A81B1E49027A /* WorldWatchWidget.appex */;
+			productType = "com.apple.product-type.app-extension";
+		};
+		C1E9827DB735CA9BAA54A540 /* WorldWatch */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 7BCEE9A04133D8A2FED7D4D3 /* Build configuration list for PBXNativeTarget "WorldWatch" */;
+			buildPhases = (
+				AFF87A50730392B6633ACECE /* Sources */,
+				7A4C2DC8FCA657188648E999 /* Frameworks */,
+				F9187E824FE171A6F0EFAE28 /* Resources */,
+				D01B6655FA0C346D45AAD2BD /* Embed App Extensions */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				A4C2D386AB0259F33DCDC427 /* PBXTargetDependency */,
+			);
+			name = WorldWatch;
+			productName = "世界动态";
+			productReference = 681C948D238C526E9E3424E0 /* 世界动态.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		244210E48437B6556980A702 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = YES;
+				LastSwiftUpdateCheck = 2700;
+				LastUpgradeCheck = 2700;
+				TargetAttributes = {
+					2F8A7BAD25491C26655C51D8 = {
+						CreatedOnToolsVersion = 27.0;
+						ProvisioningStyle = Automatic;
+					};
+					C1E9827DB735CA9BAA54A540 = {
+						CreatedOnToolsVersion = 27.0;
+						ProvisioningStyle = Automatic;
+					};
+				};
+			};
+			buildConfigurationList = B4E10CAA9C5E22150B71559C /* Build configuration list for PBXProject "WorldWatch" */;
+			compatibilityVersion = "Xcode 14.0";
+			developmentRegion = "zh-Hans";
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				"zh-Hans",
+				en,
+				Base,
+			);
+			mainGroup = 19F479106CE8C3BA8C106518;
+			productRefGroup = 0A3E27B8CA818264D75C8D81 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				C1E9827DB735CA9BAA54A540 /* WorldWatch */,
+				2F8A7BAD25491C26655C51D8 /* WorldWatchWidget */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		3DBCC61D731C18BF7451FB4B /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		F9187E824FE171A6F0EFAE28 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		3747A985C09D6E91C4EDA618 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				75F55193F40ACB5988FAECEC /* Sources/Feed.swift in Sources */,
+				9F96913EF4AF09C832EC4AB2 /* Sources/TitleTranslation.swift in Sources */,
+				BD1D448A0FE4BBAB9AF603C2 /* Widget/WorldWatchWidget.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		AFF87A50730392B6633ACECE /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				61384AF44E0744B119575A58 /* Sources/Feed.swift in Sources */,
+				2B6F95DC2E644C68FAD9BDF1 /* Sources/TitleTranslation.swift in Sources */,
+				26D02D6FA8718473153D55DD /* Sources/Main.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		A4C2D386AB0259F33DCDC427 /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 2F8A7BAD25491C26655C51D8 /* WorldWatchWidget */;
+			targetProxy = 01E77404E10F254C43E64C55 /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
+/* Begin XCBuildConfiguration section */
+		2A04C20BF6D5C20A63A1D4CC /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				DEVELOPMENT_TEAM = R58LB5VQ4A;
+				ENABLE_HARDENED_RUNTIME = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = Config/AppInfo.plist;
+				CODE_SIGN_ENTITLEMENTS = Config/App.entitlements;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = local.michael.worldwatch;
+				PRODUCT_NAME = "世界动态";
+			};
+			name = Debug;
+		};
+		35B1014F135DE9B45529B733 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CLANG_ENABLE_MODULES = YES;
+				CODE_SIGN_STYLE = Automatic;
+				ENABLE_DEBUG_DYLIB = NO;
+				MACOSX_DEPLOYMENT_TARGET = 26.0;
+				SDKROOT = macosx;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
+		488864B3D19480A82F7F1786 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CLANG_ENABLE_MODULES = YES;
+				CODE_SIGN_STYLE = Automatic;
+				ENABLE_DEBUG_DYLIB = NO;
+				MACOSX_DEPLOYMENT_TARGET = 26.0;
+				SDKROOT = macosx;
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+		B16942AF79B096778F6A0B4F /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				CODE_SIGN_ENTITLEMENTS = Widget/Widget.entitlements;
+				DEVELOPMENT_TEAM = R58LB5VQ4A;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = Widget/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+					"@executable_path/../../../../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = local.michael.worldwatch.widget;
+				PRODUCT_NAME = WorldWatchWidget;
+				SKIP_INSTALL = YES;
+			};
+			name = Debug;
+		};
+		D8C1B5D68195B015597F5DA2 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				CODE_SIGN_ENTITLEMENTS = Widget/Widget.entitlements;
+				DEVELOPMENT_TEAM = R58LB5VQ4A;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = Widget/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+					"@executable_path/../../../../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = local.michael.worldwatch.widget;
+				PRODUCT_NAME = WorldWatchWidget;
+				SKIP_INSTALL = YES;
+			};
+			name = Release;
+		};
+		E28089EB494F94D6F9770EC2 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				DEVELOPMENT_TEAM = R58LB5VQ4A;
+				ENABLE_HARDENED_RUNTIME = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = Config/AppInfo.plist;
+				CODE_SIGN_ENTITLEMENTS = Config/App.entitlements;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/../Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = local.michael.worldwatch;
+				PRODUCT_NAME = "世界动态";
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		51BC20E9DD6DE5280A769B0F /* Build configuration list for PBXNativeTarget "WorldWatchWidget" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				B16942AF79B096778F6A0B4F /* Debug */,
+				D8C1B5D68195B015597F5DA2 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		7BCEE9A04133D8A2FED7D4D3 /* Build configuration list for PBXNativeTarget "WorldWatch" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				2A04C20BF6D5C20A63A1D4CC /* Debug */,
+				E28089EB494F94D6F9770EC2 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		B4E10CAA9C5E22150B71559C /* Build configuration list for PBXProject "WorldWatch" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				488864B3D19480A82F7F1786 /* Debug */,
+				35B1014F135DE9B45529B733 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+/* End XCConfigurationList section */
+	};
+	rootObject = 244210E48437B6556980A702 /* Project object */;
+}
