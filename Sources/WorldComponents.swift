@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import ImageIO
 
 struct MapSettings: Sendable {
     var region = MapRegion.selected
@@ -92,9 +93,18 @@ struct WorldMapCanvas: View {
     }
 }
 
+/// Decodes a stored frame at display size; widgets archive every image per timeline entry.
+func cameraImage(_ url: URL, maxPixel: Int) -> NSImage? {
+    guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
+          let image = CGImageSourceCreateThumbnailAtIndex(source, 0, [kCGImageSourceCreateThumbnailFromImageAlways: true,
+            kCGImageSourceThumbnailMaxPixelSize: maxPixel, kCGImageSourceCreateThumbnailWithTransform: true] as CFDictionary) else { return nil }
+    return NSImage(cgImage: image, size: NSSize(width: image.width, height: image.height))
+}
+
 struct CameraTile: View {
     let city: CameraCity
     let frame: CameraFrame?
+    var maxPixel = 640
     var store = CameraSnapshotStore.shared
     var body: some View {
         Group {
@@ -109,7 +119,7 @@ struct CameraTile: View {
     var picture: some View {
         GeometryReader { geometry in
             ZStack(alignment: .bottomLeading) {
-                if let frame, let data = try? Data(contentsOf: store.imageURL(city: city.id, frame: frame)), let image = NSImage(data: data) {
+                if let frame, let image = cameraImage(store.imageURL(city: city.id, frame: frame), maxPixel: maxPixel) {
                     Image(nsImage: image).resizable().scaledToFill()
                         .frame(width: geometry.size.width, height: geometry.size.height).clipped()
                 } else {
@@ -132,6 +142,7 @@ struct CameraGrid: View {
     var frames: [String: [CameraFrame]]
     var index: Int
     var rows = 2
+    var maxPixel = 640
     var store = CameraSnapshotStore.shared
     var body: some View {
         VStack(spacing: 8) {
@@ -142,7 +153,7 @@ struct CameraGrid: View {
                         if cities.indices.contains(position) {
                             let city = cities[position]
                             let images = frames[city.id] ?? []
-                            CameraTile(city: city, frame: images.isEmpty ? nil : images[cameraRotationIndex(entry: index, city: position, count: images.count)], store: store)
+                            CameraTile(city: city, frame: images.isEmpty ? nil : images[cameraRotationIndex(entry: index, city: position, count: images.count)], maxPixel: maxPixel, store: store)
                         } else { Color.clear }
                     }
                 }
