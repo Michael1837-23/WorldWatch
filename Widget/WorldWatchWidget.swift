@@ -22,7 +22,16 @@ struct WorldWatchProvider: TimelineProvider {
             completion(Timeline(entries: widgetTimeline(entry, pageSize: pageSize(context.family)), policy: .after(Date().addingTimeInterval(delay))))
         }
     }
-    func pageSize(_ family: WidgetFamily) -> Int { family == .systemSmall ? 1 : family == .systemMedium ? 2 : 4 }
+    /// Candidates per entry. The view shows as many as fit, so latest mode sends a few spares;
+    /// rotation pages stay close to what is usually visible so few stories are skipped.
+    func pageSize(_ family: WidgetFamily) -> Int {
+        let rotation = NewsDisplayMode.selected == .rotation
+        switch family {
+        case .systemSmall: return rotation ? 2 : 3
+        case .systemMedium: return rotation ? 3 : 5
+        default: return rotation ? 6 : 9
+        }
+    }
     func cached() -> WorldWatchEntry? {
         if let shared = NewsSnapshotStore.shared.read() { return shared }
         let legacy = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("WorldWatch/widget-snapshot.json")
@@ -57,7 +66,7 @@ struct WorldWatchProvider: TimelineProvider {
         }
         var entry = refreshedSnapshot(previous: previous, results: results, enabledIDs: enabledIDs, mode: NewsDisplayMode.selected)
         var pool = await TitleTranslator.shared.applyCache(to: entry.rotationEvents ?? entry.events)
-        let current = entry.mode == .latest ? Array(pool.prefix(4)) : rotationEvents(pool, at: Date()).events
+        let current = entry.mode == .latest ? Array(pool.prefix(9)) : rotationEvents(pool, at: Date(), limit: 6).events
         var translatedPage = current
         do { translatedPage = try await TitleTranslator.shared.translate(current) }
         catch {
@@ -98,71 +107,97 @@ struct RefreshWorldNewsIntent: AppIntent {
     }
 }
 
+/// Stacks rows top to bottom and fills the height: whole rows first, then one truncated row
+/// if a useful part of it fits, otherwise the leftover space is shared between rows.
+/// Rows that do not fit are parked just below the clipped bounds.
+struct FillingStack: Layout {
+    var spacing: CGFloat
+    var maxExtraSpacing: CGFloat = 14
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        proposal.replacingUnspecifiedDimensions()
+    }
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        let width = bounds.width
+        var heights: [CGFloat] = []
+        var used: CGFloat = 0
+        for subview in subviews {
+            let gap = heights.isEmpty ? 0 : spacing
+            let remaining = bounds.height - used - gap
+            let natural = subview.sizeThatFits(ProposedViewSize(width: width, height: nil)).height
+            if natural <= remaining { heights.append(natural); used += gap + natural; continue }
+            let minimum = max(30, subview.sizeThatFits(ProposedViewSize(width: width, height: 0)).height)
+            if heights.isEmpty || minimum <= remaining {
+                let height = max(0, min(natural, remaining))
+                heights.append(height); used += gap + height
+            }
+            break
+        }
+        let extra = heights.count > 1 ? min(maxExtraSpacing, max(0, bounds.height - used) / CGFloat(heights.count - 1)) : 0
+        var y = bounds.minY
+        for (index, subview) in subviews.enumerated() {
+            if index < heights.count {
+                subview.place(at: CGPoint(x: bounds.minX, y: y), proposal: ProposedViewSize(width: width, height: heights[index]))
+                y += heights[index] + spacing + extra
+            } else {
+                subview.place(at: CGPoint(x: bounds.minX, y: bounds.maxY + spacing), proposal: ProposedViewSize(width: width, height: nil))
+            }
+        }
+    }
+}
+
+struct WidgetRow: View {
+    let event: WorldEvent
+    let family: WidgetFamily
+    var body: some View {
+        Link(destination: event.url) {
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 4) {
+                    Text(event.sourceName).fontWeight(.semibold)
+                    if let severity = event.severity {
+                        Text(severity).foregroundStyle(severity == "红色预警" ? Color.red : Color.orange)
+                    }
+                    Spacer(minLength: 4)
+                    if let date = event.date { Text(shortTimeLabel(date)).monospacedDigit() }
+                }
+                .font(.system(size: 10.5)).foregroundStyle(.secondary).lineLimit(1)
+                Text(event.displayTitle)
+                    .font(.system(size: family == .systemMedium ? 13 : 14, weight: .semibold))
+                    .foregroundStyle(.primary)
+                    .lineLimit(family == .systemSmall ? 5 : family == .systemMedium ? 2 : 3)
+                    .contentTransition(.opacity)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+}
+
 struct WorldWatchWidgetView: View {
     @Environment(\.widgetFamily) var family
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let entry: WorldWatchEntry
-    var rowLimit: Int { family == .systemSmall ? 1 : family == .systemMedium ? 2 : 4 }
     var body: some View {
-        VStack(alignment: .leading, spacing: family == .systemMedium ? 4 : 6) {
-            HStack(spacing: 6) {
-                Image(systemName: "globe.asia.australia.fill").widgetAccentable()
-                Text("世界动态").fontWeight(.semibold)
-                Spacer(minLength: 0)
-                if family != .systemSmall { Text(entry.mode.title).foregroundStyle(.secondary).font(.caption2) }
-                Button(intent: RefreshWorldNewsIntent()) {
-                    Image(systemName: "arrow.clockwise").frame(width: 22, height: 22)
-                }.buttonStyle(.plain).foregroundStyle(.secondary).accessibilityLabel("立即刷新世界动态")
-                    .accessibilityHint("检查来源需要数秒；没有新报道时标题保持不变")
-            }.font(.system(size: 13))
+        Group {
             if entry.events.isEmpty {
-                Text(entry.note ?? "暂无重点事件").font(.system(size: 13)).foregroundStyle(.secondary)
-                    .frame(maxHeight: .infinity, alignment: .center)
-            } else {
-                VStack(alignment: .leading, spacing: family == .systemMedium ? 4 : 6) {
-                ForEach(Array(entry.events.prefix(rowLimit))) { event in
-                    VStack(alignment: .leading, spacing: 6) {
-                    Link(destination: event.url) {
-                        VStack(alignment: .leading, spacing: 3) {
-                            Text(event.displayTitle).font(.system(size: family == .systemLarge ? 14 : family == .systemMedium ? 12 : 13, weight: .medium))
-                                .lineLimit(family == .systemSmall ? 4 : 2).foregroundStyle(.primary)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .contentTransition(.opacity)
-                            HStack(spacing: 5) {
-                                if let date = event.date { Text(date, format: .dateTime.hour().minute()) }
-                                Text(event.category.rawValue)
-                                Text(NewsSource.all.first { $0.id == event.sourceID }?.name ?? event.sourceID).lineLimit(1)
-                                if event.translatedTitle != nil { Text("机译") }
-                                if let cached = entry.sourceFeeds?[event.sourceID], cached.fetchedAt < entry.checkDate.addingTimeInterval(-1) { Text("缓存") }
-                            }.font(.system(size: 10)).foregroundStyle(.secondary).lineLimit(1)
-                        }.frame(maxWidth: .infinity, alignment: .leading)
-                    }
-                    if family != .systemSmall && event.id != entry.events.prefix(rowLimit).last?.id { Divider() }
-                    }.transition(reduceMotion ? .opacity : .asymmetric(insertion: .move(edge: .top).combined(with: .opacity), removal: .opacity))
+                VStack(spacing: 6) {
+                    Image(systemName: "globe.asia.australia").font(.title2)
+                    Text(entry.note ?? "暂无新报道").font(.caption)
                 }
-                }.animation(reduceMotion ? .easeOut(duration: 0.15) : .spring(response: 0.48, dampingFraction: 0.92), value: Array(entry.events.prefix(rowLimit).map(\.id)))
-                    .clipped()
-                Spacer(minLength: 0)
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                FillingStack(spacing: family == .systemLarge ? 9 : 7) {
+                    ForEach(entry.events) { event in
+                        WidgetRow(event: event, family: family)
+                            .transition(reduceMotion ? .opacity : .asymmetric(insertion: .move(edge: .top).combined(with: .opacity), removal: .opacity))
+                    }
+                }
+                .animation(reduceMotion ? .easeOut(duration: 0.15) : .spring(response: 0.48, dampingFraction: 0.92), value: entry.events.map(\.id))
+                .clipped()
             }
-            HStack(spacing: 3) {
-                if entry.note != nil { Image(systemName: "exclamationmark.circle") }
-                Text(statusCaption)
-            }.font(.system(size: 9)).foregroundStyle(.secondary).lineLimit(family == .systemSmall ? 2 : 1)
-                .invalidatableContent()
         }
         .containerBackground(.background, for: .widget)
         .widgetURL(URL(string: "worldwatch://open"))
         .environment(\.locale, Locale(identifier: "zh_CN"))
-    }
-    var statusCaption: String {
-        let checked = entry.checkDate.formatted(.dateTime.hour().minute().second())
-        if entry.enabledSourceIDs?.isEmpty == true { return "未启用来源 · 请在应用中设置" }
-        if entry.availableSources == 0 { return "\(checked) 检查失败 · 保留缓存" }
-        if entry.mode == .latest { return "\(entry.availableSources)/\(entry.enabledSourceIDs?.count ?? NewsSource.all.count)源 · \(checked)检查 · 最新优先" }
-        let page = entry.rotationPage ?? 1
-        let pages = entry.rotationPageCount ?? 1
-        return "\(entry.availableSources)/\(entry.enabledSourceIDs?.count ?? NewsSource.all.count)源 · \(checked)检查 · 轮播\(page)/\(pages)"
-
     }
 }
 

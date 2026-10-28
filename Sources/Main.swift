@@ -1,4 +1,5 @@
 import Cocoa
+import Combine
 import SwiftUI
 import Translation
 import WidgetKit
@@ -67,7 +68,7 @@ struct CachedFeed: Codable {
         translating = true
         defer { translating = false }
         let balanced = displayPool(events, mode: widgetDisplayMode)
-        let current = widgetDisplayMode == .latest ? Array(balanced.prefix(4)) : rotationEvents(balanced, at: Date()).events
+        let current = widgetDisplayMode == .latest ? Array(balanced.prefix(9)) : rotationEvents(balanced, at: Date(), limit: 6).events
         let currentIDs = Set(current.map(\.id))
         let original = current + balanced.filter { !currentIDs.contains($0.id) } + events.filter { item in !balanced.contains { $0.id == item.id } }
         let cached = await TitleTranslator.shared.applyCache(to: original)
@@ -177,47 +178,46 @@ struct CachedFeed: Codable {
     }
 }
 
-private let ink = Color(red: 0.92, green: 0.94, blue: 0.98)
-private let secondaryInk = Color(red: 0.64, green: 0.70, blue: 0.79)
-private let accent = Color(red: 0.49, green: 0.74, blue: 1.0)
-
 struct EventRow: View {
     let event: WorldEvent
-    let cached: Bool
+    @State private var hovering = false
     var body: some View {
         Button {
             NSWorkspace.shared.open(event.url)
         } label: {
-            HStack(alignment: .top, spacing: 14) {
-                VStack(alignment: .leading, spacing: 4) {
+            VStack(alignment: .leading, spacing: 4) {
+                HStack(spacing: 6) {
+                    Text(event.sourceName).fontWeight(.semibold).foregroundStyle(.secondary)
+                    if let severity = event.severity {
+                        Text(severity).fontWeight(.medium).foregroundStyle(severity == "红色预警" ? Color.red : Color.orange)
+                    }
+                    Spacer(minLength: 8)
                     if let date = event.date {
-                        Text(date, format: .dateTime.hour().minute()).font(.system(size: 13, weight: .medium, design: .monospaced))
-                        Text(date, format: .dateTime.month().day()).font(.system(size: 10))
-                    } else { Text("时间未知").font(.system(size: 10)) }
-                    Text(event.timeKind).font(.system(size: 10))
-                }.foregroundStyle(secondaryInk).frame(width: 55, alignment: .leading)
-                VStack(alignment: .leading, spacing: 7) {
-                    Text(event.displayTitle).font(.system(size: 14, weight: .medium)).lineSpacing(3).fixedSize(horizontal: false, vertical: true).foregroundStyle(ink)
-                    HStack(spacing: 7) {
-                        Text(event.category.rawValue).foregroundStyle(accent)
-                        Text(NewsSource.all.first { $0.id == event.sourceID }?.name ?? event.sourceID).foregroundStyle(secondaryInk)
-                        if let severity = event.severity { Text(severity).foregroundStyle(event.severity == "红色预警" ? Color(red: 1, green: 0.59, blue: 0.57) : Color(red: 1, green: 0.77, blue: 0.47)) }
-                        if cached { Text("缓存").foregroundStyle(Color.orange) }
-                        if event.translatedTitle != nil { Text("机译").foregroundStyle(secondaryInk) }
-                        Spacer(minLength: 0)
-                        Image(systemName: "arrow.up.right").foregroundStyle(secondaryInk.opacity(0.6))
-                    }.font(.system(size: 10))
+                        Text((event.timeKind == "发生" ? "发生 " : "") + shortTimeLabel(date)).monospacedDigit().foregroundStyle(.tertiary)
+                    }
                 }
-            }.padding(.vertical, 13).padding(.horizontal, 20)
-                .contentShape(Rectangle())
-        }.buttonStyle(.plain)
-            .help("原文：\(event.title)\n打开原始报道 · \(event.url.host ?? "")")
+                .font(.system(size: 11)).lineLimit(1)
+                Text(event.displayTitle)
+                    .font(.system(size: 14, weight: .medium))
+                    .lineSpacing(2)
+                    .foregroundStyle(.primary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .padding(.horizontal, 10).padding(.vertical, 9)
+            .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(Color.primary.opacity(hovering ? 0.06 : 0)))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering = $0 }
+        .help(event.translatedTitle == nil ? "打开原始报道 · \(event.url.host ?? "")" : "原文：\(event.title)\n打开原始报道 · \(event.url.host ?? "")")
     }
 }
 
 struct WorldView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @ObservedObject var store: EventStore
+    static let scopes = ["综合", "最新", "国内", "国际", "政治", "财经", "科技", "文娱", "体育", "灾害"]
     var rows: [WorldEvent] {
         if store.filter == "综合" {
             let pool = digestPool(store.events, now: store.rotationDate)
@@ -237,130 +237,165 @@ struct WorldView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            VStack(alignment: .leading, spacing: 17) {
-                HStack(spacing: 9) {
-                    Image(systemName: "globe.asia.australia.fill").font(.system(size: 21)).foregroundStyle(accent)
-                    Text("世界动态").font(.system(size: 19, weight: .semibold)).foregroundStyle(ink)
-                    Spacer()
-                    Button { Task { await store.refresh(reloadWidget: true) } } label: {
-                        Image(systemName: "arrow.clockwise").frame(width: 26, height: 26)
-                    }.buttonStyle(.plain).foregroundStyle(secondaryInk).disabled(store.refreshing)
-                        .help("立即检查更新").accessibilityLabel("立即检查更新")
-                    Button { store.showSources.toggle() } label: {
-                        Image(systemName: "slider.horizontal.3").frame(width: 26, height: 26)
-                    }.buttonStyle(.plain).foregroundStyle(store.showSources ? accent : secondaryInk)
-                        .help("来源与刷新设置").accessibilityLabel("来源与刷新设置")
-                }
-                HStack(spacing: 5) {
-                    Picker("新闻范围", selection: $store.filter) {
-                        ForEach(["综合", "最新", "国内", "国际", "政治", "财经", "科技", "文娱", "体育", "灾害"], id: \.self) { choice in
-                            Text(choice == "综合" ? "综合 · 每分钟轮播" : choice).tag(choice)
-                        }
-                    }.labelsHidden().pickerStyle(.menu).fixedSize().accessibilityLabel("新闻范围")
-                    Spacer()
-                    Text("\(rows.count) 条").font(.system(size: 11)).foregroundStyle(secondaryInk)
-                }
-            }.padding(20).padding(.bottom, -3)
-            Rectangle().fill(Color.white.opacity(0.08)).frame(height: 1)
-            if !store.translationStatus.hasPrefix("中文自动翻译已开启") {
-                HStack(alignment: .center, spacing: 8) {
-                    Text(store.translationStatus).font(.system(size: 11)).foregroundStyle(secondaryInk).fixedSize(horizontal: false, vertical: true)
-                    Spacer(minLength: 0)
-                    if !store.translating {
-                        Button("启用中文") { store.prepareChinese() }.font(.system(size: 11)).buttonStyle(.bordered)
-                    }
-                }.padding(.horizontal, 20).padding(.vertical, 10)
-            }
-            if store.showSources { sourceSettings }
-            else if rows.isEmpty {
-                VStack(spacing: 12) {
-                    Image(systemName: store.refreshing ? "antenna.radiowaves.left.and.right" : "globe").font(.system(size: 30)).foregroundStyle(accent)
-                    Text(store.refreshing ? "正在获取全球动态…" : store.enabledSources.isEmpty ? "尚未选择来源" : store.healthyCount == 0 ? "暂时无法连接来源" : "当前范围暂无新事件")
-                        .font(.system(size: 15, weight: .medium)).foregroundStyle(ink)
-                    Text(store.enabledSources.isEmpty ? "点右上角设置，启用一个来源。" : store.healthyCount == 0 && !store.refreshing ? "检查网络后重试；可在来源设置查看错误。" : "新闻保留三天，灾害保留七天。")
-                        .font(.system(size: 12)).foregroundStyle(secondaryInk).multilineTextAlignment(.center)
-                    if !store.refreshing && !store.enabledSources.isEmpty {
-                        Button("重新连接") { Task { await store.refresh() } }.buttonStyle(.bordered)
-                    }
-                }.padding(28).frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else {
-                ScrollView {
-                    LazyVStack(spacing: 0) {
-                        ForEach(rows.prefix(200)) { event in
-                            VStack(spacing: 0) {
-                            EventRow(event: event, cached: store.errors[event.sourceID] != nil || Date().timeIntervalSince(store.feeds[event.sourceID]?.fetched ?? .distantPast) > store.interval * 3)
-                            Rectangle().fill(Color.white.opacity(0.055)).frame(height: 1).padding(.leading, 89).padding(.trailing, 20)
-                            }.transition(reduceMotion ? .opacity : .asymmetric(insertion: .move(edge: .top).combined(with: .opacity), removal: .opacity))
-                        }
-                    }.animation(reduceMotion ? .easeOut(duration: 0.15) : .spring(response: 0.48, dampingFraction: 0.92), value: Array(rows.prefix(200).map(\.id)))
-                }.clipped()
-            }
-            Rectangle().fill(Color.white.opacity(0.08)).frame(height: 1)
-            TimelineView(.periodic(from: .now, by: 30)) { context in
-                HStack(alignment: .center, spacing: 6) {
-                    Circle().fill(statusColor(now: context.date)).frame(width: 5, height: 5)
-                    Text(statusText).lineLimit(1)
-                    Spacer(minLength: 4)
-                    Text("\(TimeZone.current.abbreviation() ?? "本地") · \(Int(store.interval / 60))分钟检查")
-                }.font(.system(size: 10)).foregroundStyle(secondaryInk)
-            }.padding(.horizontal, 20).padding(.vertical, 12)
+            header
+            if !store.translationStatus.hasPrefix("中文自动翻译已开启") { translationNotice }
+            Divider()
+            content
         }
         .frame(minWidth: 350, maxWidth: .infinity, minHeight: 350, maxHeight: .infinity)
-        .background(Color(red: 0.065, green: 0.085, blue: 0.12))
-        .clipShape(RoundedRectangle(cornerRadius: 16))
         .environment(\.locale, Locale(identifier: "zh_CN"))
-        .preferredColorScheme(.dark)
         .translationTask(store.translationConfiguration) { session in
             await store.prepareChinese(using: session)
         }
     }
-    var statusText: String {
-        if store.refreshing { return "正在检查更新…" }
-        if store.enabledSources.isEmpty { return "来源已停用" }
-        guard let date = store.lastCheck else { return store.feeds.isEmpty ? "等待连接" : "显示上次缓存 · 正在连接" }
-        let time = date.formatted(.dateTime.hour().minute())
-        return "\(time) 检查 · \(store.healthyCount)/\(store.enabledSources.count) 来源可用"
-    }
-    func statusColor(now: Date) -> Color {
-        if store.refreshing { return accent }
-        if store.healthyCount == 0 || store.lastCheck == nil { return .orange }
-        if now.timeIntervalSince(store.lastCheck!) > store.interval * 3 { return .orange }
-        return store.healthyCount == store.enabledSources.count ? Color(red: 0.49, green: 0.8, blue: 0.68) : .orange
-    }
-    var sourceSettings: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 18) {
-                Text("小组件显示").font(.system(size: 14, weight: .semibold)).foregroundStyle(ink)
-                Picker("显示模式", selection: Binding(get: { store.widgetDisplayMode }, set: { store.setWidgetDisplayMode($0) })) {
-                    ForEach(NewsDisplayMode.allCases, id: \.self) { mode in Text(mode.title).tag(mode) }
-                }.pickerStyle(.segmented).accessibilityLabel("小组件显示模式")
-                Text(store.widgetDisplayMode == .latest ? "按报道时间倒序。新报道置顶，已有条目顺次下移；没有新增时保持原位。" : "混合不同领域，按分钟计划轮换近期报道。轮播不代表新发布。")
-                    .font(.system(size: 11)).foregroundStyle(secondaryInk).fixedSize(horizontal: false, vertical: true)
-                Divider()
-                Text("消息来源").font(.system(size: 14, weight: .semibold)).foregroundStyle(ink)
-                ForEach(NewsSource.all) { source in
-                    VStack(alignment: .leading, spacing: 5) {
-                        Toggle(isOn: Binding(get: { !store.disabled.contains(source.id) }, set: { _ in store.toggle(source) })) {
-                            Text(source.name).font(.system(size: 13, weight: .medium)).foregroundStyle(ink)
-                        }.toggleStyle(.switch).controlSize(.small)
-                        Text(source.detail).font(.system(size: 11)).foregroundStyle(secondaryInk)
-                        if let error = store.errors[source.id], !store.disabled.contains(source.id) {
-                            Text(error).font(.system(size: 10)).foregroundStyle(Color.orange).textSelection(.enabled)
-                        } else if let fetched = store.feeds[source.id]?.fetched {
-                            Text("上次成功：\(fetched.formatted(.dateTime.month().day().hour().minute()))").font(.system(size: 10)).foregroundStyle(secondaryInk)
+
+    var header: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(alignment: .center) {
+                Text("世界动态").font(.system(size: 22, weight: .bold))
+                Spacer()
+                Group {
+                    if store.refreshing {
+                        ProgressView().controlSize(.small).frame(width: 28, height: 28)
+                    } else {
+                        Button { Task { await store.refresh(reloadWidget: true) } } label: {
+                            Image(systemName: "arrow.clockwise").frame(width: 28, height: 28)
                         }
+                        .help("立即检查更新").accessibilityLabel("立即检查更新")
+                    }
+                    Button { store.showSources = true } label: {
+                        Image(systemName: "gearshape").frame(width: 28, height: 28)
+                    }
+                    .help("设置").accessibilityLabel("设置")
+                }
+                .buttonStyle(.borderless).font(.system(size: 14)).foregroundStyle(.secondary)
+            }
+            HStack(spacing: 6) {
+                TimelineView(.periodic(from: .now, by: 30)) { context in
+                    HStack(spacing: 5) {
+                        if needsAttention(now: context.date) { Circle().fill(Color.orange).frame(width: 6, height: 6) }
+                        Text(statusText)
                     }
                 }
-                Divider()
-                Text(store.translationStatus).font(.system(size: 11)).foregroundStyle(secondaryInk)
-                Button("准备中英翻译语言") { store.prepareChinese() }.buttonStyle(.bordered)
-                Picker("检查间隔", selection: Binding(get: { store.interval }, set: { store.setInterval($0) })) {
-                    Text("1 分钟").tag(60.0); Text("3 分钟").tag(180.0); Text("5 分钟").tag(300.0)
-                }.font(.system(size: 12))
-                Text("默认每分钟联网检查，翻译在后台继续处理。小组件可选最新优先或综合轮播。最新优先按报道时间排序，有新内容时平滑插入；综合轮播混合各领域的近期报道。原生组件实际切换时刻由 macOS 决定，无法保证严格每分钟更新。退出应用后组件仍按系统调度检查，也可手动刷新。")
-                    .font(.system(size: 11)).lineSpacing(4).foregroundStyle(secondaryInk)
-                Button("完成") { store.showSources = false }.buttonStyle(.borderedProminent).tint(accent).foregroundStyle(Color.black)
-            }.padding(20)
+                .font(.system(size: 12)).foregroundStyle(.secondary).lineLimit(1)
+                Spacer(minLength: 8)
+                Menu {
+                    Picker("范围", selection: $store.filter) {
+                        ForEach(Self.scopes, id: \.self) { Text($0).tag($0) }
+                    }
+                    .pickerStyle(.inline).labelsHidden()
+                } label: {
+                    Text("\(store.filter) · \(rows.count) 条").font(.system(size: 12, weight: .medium))
+                }
+                .menuStyle(.button).buttonStyle(.borderless).fixedSize()
+                .accessibilityLabel("新闻范围")
+            }
+        }
+        .padding(.horizontal, 20).padding(.top, 2).padding(.bottom, 12)
+    }
+
+    var translationNotice: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "character.bubble").foregroundStyle(.secondary)
+            Text(store.translationStatus).font(.system(size: 12)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 0)
+            if !store.translating { Button("启用中文") { store.prepareChinese() }.controlSize(.small) }
+        }
+        .padding(.horizontal, 12).padding(.vertical, 8)
+        .background(.quaternary.opacity(0.6), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+        .padding(.horizontal, 12).padding(.bottom, 10)
+    }
+
+    @ViewBuilder var content: some View {
+        if rows.isEmpty {
+            ContentUnavailableView {
+                if store.refreshing { Label("正在获取新闻", systemImage: "antenna.radiowaves.left.and.right") }
+                else if store.enabledSources.isEmpty { Label("尚未选择来源", systemImage: "newspaper") }
+                else if store.healthyCount == 0 { Label("暂时无法连接", systemImage: "wifi.exclamationmark") }
+                else { Label("暂无报道", systemImage: "globe.asia.australia") }
+            } description: {
+                Text(store.enabledSources.isEmpty ? "在设置中启用至少一个来源。" : store.healthyCount == 0 && !store.refreshing ? "请检查网络后重试。" : "新闻保留三天，灾害保留七天。")
+            } actions: {
+                if store.enabledSources.isEmpty { Button("打开设置") { store.showSources = true } }
+                else if !store.refreshing { Button("重新连接") { Task { await store.refresh() } } }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else {
+            ScrollView {
+                LazyVStack(spacing: 2) {
+                    ForEach(rows.prefix(200)) { event in
+                        EventRow(event: event)
+                            .transition(reduceMotion ? .opacity : .asymmetric(insertion: .move(edge: .top).combined(with: .opacity), removal: .opacity))
+                    }
+                }
+                .padding(.horizontal, 10).padding(.vertical, 8)
+                .animation(reduceMotion ? .easeOut(duration: 0.15) : .spring(response: 0.48, dampingFraction: 0.92), value: Array(rows.prefix(200).map(\.id)))
+            }
+            .clipped()
+        }
+    }
+
+    var statusText: String {
+        if store.refreshing { return "正在检查更新…" }
+        if store.enabledSources.isEmpty { return "未启用来源" }
+        guard let date = store.lastCheck else { return store.feeds.isEmpty ? "等待连接" : "显示上次缓存" }
+        return "\(shortTimeLabel(date)) 已检查 · \(store.healthyCount)/\(store.enabledSources.count) 个来源"
+    }
+    func needsAttention(now: Date) -> Bool {
+        guard !store.refreshing, !store.enabledSources.isEmpty, let last = store.lastCheck else { return false }
+        return store.healthyCount < store.enabledSources.count || now.timeIntervalSince(last) > store.interval * 3
+    }
+}
+
+struct SettingsView: View {
+    @ObservedObject var store: EventStore
+    var body: some View {
+        VStack(spacing: 0) {
+            Form {
+                Section {
+                    Picker("显示方式", selection: Binding(get: { store.widgetDisplayMode }, set: { store.setWidgetDisplayMode($0) })) {
+                        ForEach(NewsDisplayMode.allCases, id: \.self) { Text($0.title).tag($0) }
+                    }
+                    .pickerStyle(.segmented)
+                } header: { Text("小组件") } footer: {
+                    Text(store.widgetDisplayMode == .latest ? "按报道时间排列，新报道出现在最上方。" : "混合不同领域的近期报道并定时轮换，轮换不代表新发布。")
+                        .foregroundStyle(.secondary)
+                }
+                Section("更新") {
+                    Picker("检查间隔", selection: Binding(get: { store.interval }, set: { store.setInterval($0) })) {
+                        Text("1 分钟").tag(60.0); Text("3 分钟").tag(180.0); Text("5 分钟").tag(300.0)
+                    }
+                }
+                Section("翻译") {
+                    LabeledContent("中英翻译") {
+                        Text(store.translationStatus).foregroundStyle(.secondary).multilineTextAlignment(.trailing)
+                    }
+                    Button("准备本机翻译语言") { store.prepareChinese() }
+                }
+                Section {
+                    ForEach(NewsSource.all) { source in
+                        Toggle(isOn: Binding(get: { !store.disabled.contains(source.id) }, set: { _ in store.toggle(source) })) {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(source.name)
+                                sourceDetail(source).font(.system(size: 11))
+                            }
+                        }
+                    }
+                } header: { Text("来源") } footer: {
+                    Text("新闻保留三天，灾害保留七天。小组件的实际刷新时刻由 macOS 决定。").foregroundStyle(.secondary)
+                }
+            }
+            .formStyle(.grouped)
+        }
+        .frame(width: 440).frame(minHeight: 420, idealHeight: 620)
+    }
+    @ViewBuilder func sourceDetail(_ source: NewsSource) -> some View {
+        if let error = store.errors[source.id], !store.disabled.contains(source.id) {
+            Text(error).foregroundStyle(.orange)
+        } else if let fetched = store.feeds[source.id]?.fetched {
+            Text("\(source.detail) · \(shortTimeLabel(fetched)) 更新").foregroundStyle(.secondary)
+        } else {
+            Text(source.detail).foregroundStyle(.secondary)
         }
     }
 }
@@ -369,11 +404,14 @@ struct WorldView: View {
     let store = EventStore()
     var panel: NSWindow!
     var item: NSStatusItem!
+    var settingsWindow: NSWindow?
+    var settingsRequest: AnyCancellable?
     func applicationDidFinishLaunching(_ notification: Notification) {
-        panel = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 420, height: 610), styleMask: [.titled, .closable, .miniaturizable, .resizable], backing: .buffered, defer: false)
+        panel = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 420, height: 610), styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView], backing: .buffered, defer: false)
         panel.title = "世界动态"
+        panel.titleVisibility = .hidden
+        panel.titlebarAppearsTransparent = true
         panel.delegate = self
-        panel.isOpaque = false; panel.backgroundColor = .clear; panel.hasShadow = true
         panel.isReleasedWhenClosed = false
         panel.minSize = NSSize(width: 350, height: 350)
         panel.level = .normal
@@ -384,7 +422,8 @@ struct WorldView: View {
         item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         item.button?.image = NSImage(systemSymbolName: "globe.asia.australia", accessibilityDescription: "世界动态")
         let menu = NSMenu()
-        menu.addItem(withTitle: "打开新闻与设置", action: #selector(show), keyEquivalent: "")
+        menu.addItem(withTitle: "打开世界动态", action: #selector(show), keyEquivalent: "")
+        menu.addItem(withTitle: "设置…", action: #selector(openSettings), keyEquivalent: ",")
         menu.addItem(withTitle: "隐藏窗口", action: #selector(hide), keyEquivalent: "")
         menu.addItem(withTitle: "重置位置", action: #selector(resetPosition), keyEquivalent: "")
         menu.addItem(.separator())
@@ -395,6 +434,11 @@ struct WorldView: View {
         item.menu = menu
         panel.orderFrontRegardless()
         store.start()
+        // In-app "设置" buttons set showSources; present the standalone settings window instead of a sheet.
+        settingsRequest = store.$showSources.filter { $0 }.receive(on: DispatchQueue.main).sink { [weak self] _ in
+            self?.store.showSources = false
+            self?.presentSettings()
+        }
         NSWorkspace.shared.notificationCenter.addObserver(self, selector: #selector(refresh), name: NSWorkspace.didWakeNotification, object: nil)
         NotificationCenter.default.addObserver(self, selector: #selector(screensChanged), name: NSApplication.didChangeScreenParametersNotification, object: nil)
     }
@@ -404,6 +448,20 @@ struct WorldView: View {
     @objc func screensChanged() { ensureVisible() }
     @objc func show() { ensureVisible(); panel.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true) }
     @objc func hide() { panel.orderOut(nil) }
+    @objc func openSettings() { presentSettings() }
+    func presentSettings() {
+        if settingsWindow == nil {
+            let window = NSWindow(contentViewController: NSHostingController(rootView: SettingsView(store: store)))
+            window.title = "设置"
+            window.styleMask = [.titled, .closable, .resizable]
+            window.isReleasedWhenClosed = false
+            window.setContentSize(NSSize(width: 440, height: 620))
+            window.center()
+            settingsWindow = window
+        }
+        settingsWindow?.makeKeyAndOrderFront(nil)
+        NSApp.activate(ignoringOtherApps: true)
+    }
     @objc func resetPosition() {
         guard let screen = NSScreen.main ?? NSScreen.screens.first else { return }
         let f = screen.visibleFrame

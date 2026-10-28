@@ -48,6 +48,7 @@ struct WorldEvent: Identifiable, Codable, Sendable {
     let severity: String?
     var translatedTitle: String? = nil
     var displayTitle: String { translatedTitle ?? title }
+    var sourceName: String { NewsSource.all.first { $0.id == sourceID }?.name ?? sourceID }
     var isDomestic: Bool { NewsSource.all.first { $0.id == sourceID }?.domestic ?? false }
     var category: NewsCategory {
         if disaster { return .disaster }
@@ -300,6 +301,15 @@ private let feedDateFormatters: [DateFormatter] = ["EEE, dd MMM yyyy HH:mm:ss Z"
     formatter.timeZone = TimeZone(secondsFromGMT: 0)
     formatter.dateFormat = format
     return formatter
+}
+
+/// Mail-style time label: "10:23" today, "昨天 10:23", otherwise "10月26日".
+func shortTimeLabel(_ date: Date, now: Date = Date()) -> String {
+    let calendar = Calendar.current
+    let time = date.formatted(Date.FormatStyle(locale: Locale(identifier: "zh_CN")).hour(.twoDigits(amPM: .omitted)).minute(.twoDigits))
+    if calendar.isDate(date, inSameDayAs: now) { return time }
+    if let yesterday = calendar.date(byAdding: .day, value: -1, to: now), calendar.isDate(date, inSameDayAs: yesterday) { return "昨天 " + time }
+    return date.formatted(Date.FormatStyle(locale: Locale(identifier: "zh_CN")).month(.defaultDigits).day())
 }
 
 func parseDate(_ text: String?) -> Date? {
