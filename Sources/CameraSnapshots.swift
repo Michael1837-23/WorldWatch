@@ -6,6 +6,7 @@ import Darwin
 enum CameraCandidate: Sendable {
     case youtubeSearch(String)
     case bilibiliRoom(Int)
+    case bilibiliSearch(String)
     case jpeg(String, String)
 }
 
@@ -15,10 +16,10 @@ struct CameraCity: Identifiable, Sendable {
     let keywords: [String]
     let candidates: [CameraCandidate]
     static let all: [CameraCity] = [
-        .init(id: "beijing", name: "北京", keywords: ["beijing", "北京", "peking"], candidates: [.youtubeSearch("beijing city live camera"), .youtubeSearch("北京 实景 直播")]),
-        .init(id: "shanghai", name: "上海", keywords: ["shanghai", "上海"], candidates: [.youtubeSearch("shanghai bund live camera"), .youtubeSearch("Shanghai Bund live")]),
+        .init(id: "beijing", name: "北京", keywords: ["beijing", "北京", "peking"], candidates: [.bilibiliRoom(3291055), .bilibiliSearch("北京 街景"), .bilibiliSearch("北京 实景"), .youtubeSearch("beijing city live camera")]),
+        .init(id: "shanghai", name: "上海", keywords: ["shanghai", "上海"], candidates: [.youtubeSearch("shanghai bund live camera"), .youtubeSearch("Shanghai Bund live"), .bilibiliSearch("上海 街景")]),
         .init(id: "hongkong", name: "香港", keywords: ["hong kong", "hongkong", "香港", "victoria harbour"], candidates: [.jpeg("https://www.hko.gov.hk/wxinfo/aws/hko_mica/hk2/latest_HK2.jpg", "https://www.hko.gov.hk/en/wxinfo/ts/index_webcam.htm"), .youtubeSearch("hong kong victoria harbour live")]),
-        .init(id: "chongqing", name: "重庆", keywords: ["chongqing", "重庆", "重慶"], candidates: [.youtubeSearch("chongqing city live camera"), .youtubeSearch("重庆 洪崖洞 实景 直播")]),
+        .init(id: "chongqing", name: "重庆", keywords: ["chongqing", "重庆", "重慶"], candidates: [.bilibiliSearch("重庆 街景"), .bilibiliSearch("重庆 慢直播"), .bilibiliSearch("重庆 实景"), .youtubeSearch("chongqing city live camera")]),
         .init(id: "tokyo", name: "东京", keywords: ["tokyo", "shibuya", "shinjuku", "東京", "渋谷", "新宿"], candidates: [.youtubeSearch("tokyo shibuya live camera"), .youtubeSearch("tokyo shinjuku live camera")]),
         .init(id: "taipei", name: "台北", keywords: ["taipei", "台北", "臺北", "象山", "大稻埕"], candidates: [.youtubeSearch("taipei live camera"), .youtubeSearch("taipei dadaocheng live camera")]),
         .init(id: "newyork", name: "纽约", keywords: ["new york", "times square", "nyc", "brooklyn"], candidates: [.youtubeSearch("new york times square live"), .youtubeSearch("new york brooklyn bridge live camera")]),
@@ -87,6 +88,28 @@ func bilibiliKeyframe(_ data: Data) -> URL? {
           ["http", "https"].contains(url.scheme ?? ""), url.host != nil else { return nil }
     url.scheme = "https"
     return url.url
+}
+
+func bilibiliRoomIDs(_ html: String) -> [Int] {
+    let regex = try! NSRegularExpression(pattern: #"live\.bilibili\.com/(?:h5/)?([0-9]{3,12})"#)
+    var seen = Set<Int>()
+    return regex.matches(in: html, range: NSRange(html.startIndex..., in: html)).compactMap { match in
+        guard let range = Range(match.range(at: 1), in: html), let id = Int(html[range]) else { return nil }
+        return seen.insert(id).inserted ? id : nil
+    }
+}
+
+func bilibiliTitle(_ data: Data) -> String? {
+    guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any], let info = root["data"] as? [String: Any] else { return nil }
+    return info["title"] as? String
+}
+
+/// Search results mix in esports and chat rooms named after the city; keep only street or scenery cameras.
+func bilibiliSceneTitle(_ title: String, city: CameraCity) -> Bool {
+    let text = title.lowercased()
+    let scene = ["街景", "实景", "實景", "慢直播", "窗外", "夜景", "江景", "实时", "風景", "风景", "镜头", "鏡頭"]
+    let excluded = ["vs", "狼队", "王者", "游戏", "电竞", "点歌", "pk", "身高", "kpl"]
+    return city.keywords.contains(where: text.contains) && scene.contains(where: text.contains) && !excluded.contains(where: text.contains)
 }
 
 struct CameraFrame: Codable, Identifiable, Sendable {
@@ -192,6 +215,11 @@ actor CameraService {
             try jpeg.write(to: folder.appendingPathComponent(name), options: .atomic)
             frames.append(CameraFrame(file: generation + "/" + name, sourceType: type, page: page, imageURL: url, fetchedAt: Date()))
         }
+        func bilibili(_ room: Int) async throws {
+            guard frames.count < limit, remaining() > 0.2 else { return }
+            let (data, _) = try await cameraRequest(bilibiliInfoURL(room), timeout: remaining())
+            if let url = bilibiliKeyframe(data) { try await save(url, page: URL(string: "https://live.bilibili.com/\(room)")!, type: "B站直播截图") }
+        }
         for candidate in city.candidates {
             if frames.count >= limit || remaining() < 0.2 || Task.isCancelled { break }
             do {
@@ -199,8 +227,12 @@ actor CameraService {
                 case .jpeg(let image, let page):
                     if let url = safeURL(image), let link = safeURL(page) { try await save(url, page: link, type: "官方摄像头") }
                 case .bilibiliRoom(let room):
-                    let (data, _) = try await cameraRequest(URL(string: "https://api.live.bilibili.com/room/v1/Room/get_info?room_id=\(room)")!, timeout: remaining())
-                    if let url = bilibiliKeyframe(data) { try await save(url, page: URL(string: "https://live.bilibili.com/\(room)")!, type: "B站直播截图") }
+                    try await bilibili(room)
+                case .bilibiliSearch(let keyword):
+                    for room in try await bilibiliRooms(keyword, city: city, timeout: remaining()).prefix(3) {
+                        if frames.count >= limit || remaining() < 0.2 { break }
+                        try? await bilibili(room)
+                    }
                 case .youtubeSearch(let query):
                     let ids = try await videoIDs(query, city: city, timeout: remaining())
                     for id in ids.prefix(5) {
@@ -221,6 +253,31 @@ actor CameraService {
             return saved && !frames.isEmpty
         } catch { NSLog("实景缓存保存失败：%@ %@", city.name, error.localizedDescription); return false }
     }
+    private func bilibiliInfoURL(_ room: Int) -> URL {
+        URL(string: "https://api.live.bilibili.com/room/v1/Room/get_info?room_id=\(room)")!
+    }
+    private func bilibiliRooms(_ keyword: String, city: CameraCity, timeout: TimeInterval) async throws -> [Int] {
+        let key = "bilibili:" + keyword
+        if let cached = searches[key], cached.selectionVersion == 1, Date().timeIntervalSince(cached.fetchedAt) < 21600 { return cached.ids.compactMap { Int($0) } }
+        var components = URLComponents(string: "https://search.bilibili.com/live")!
+        components.queryItems = [URLQueryItem(name: "keyword", value: keyword)]
+        let (data, _) = try await cameraRequest(components.url!, timeout: timeout)
+        var rooms: [Int] = []
+        // The search page lists room links; the public room API supplies title and live state for filtering.
+        for room in bilibiliRoomIDs(String(decoding: data, as: UTF8.self)).prefix(8) {
+            guard let info = try? await cameraRequest(bilibiliInfoURL(room), timeout: min(8, timeout)).0,
+                  bilibiliKeyframe(info) != nil, let title = bilibiliTitle(info), bilibiliSceneTitle(title, city: city) else { continue }
+            rooms.append(room)
+        }
+        remember(key, ids: rooms.map(String.init))
+        return rooms
+    }
+    private func remember(_ key: String, ids: [String]) {
+        // Empty searches retry after ten minutes; successful searches stay cached for six hours.
+        searches[key] = VideoSearchCache(fetchedAt: ids.isEmpty ? Date().addingTimeInterval(-21000) : Date(), ids: ids, selectionVersion: 1)
+        try? FileManager.default.createDirectory(at: store.root, withIntermediateDirectories: true)
+        if let encoded = try? JSONEncoder().encode(searches) { try? encoded.write(to: store.root.appendingPathComponent("searches.json"), options: .atomic) }
+    }
     private func videoIDs(_ query: String, city: CameraCity, timeout: TimeInterval) async throws -> [String] {
         if let cached = searches[query], cached.selectionVersion == 1, Date().timeIntervalSince(cached.fetchedAt) < 21600 { return cached.ids }
         var components = URLComponents(string: "https://www.youtube.com/results")!
@@ -228,10 +285,7 @@ actor CameraService {
         let (data, _) = try await cameraRequest(components.url!, timeout: timeout)
         guard let html = String(data: data, encoding: .utf8) else { throw FeedError.invalid }
         let ids = cityYouTubeIDs(html, city: city)
-        // Empty searches retry after ten minutes; successful searches stay cached for six hours.
-        searches[query] = VideoSearchCache(fetchedAt: ids.isEmpty ? Date().addingTimeInterval(-21000) : Date(), ids: ids, selectionVersion: 1)
-        try? FileManager.default.createDirectory(at: store.root, withIntermediateDirectories: true)
-        if let encoded = try? JSONEncoder().encode(searches) { try? encoded.write(to: store.root.appendingPathComponent("searches.json"), options: .atomic) }
+        remember(query, ids: ids)
         return ids
     }
 }

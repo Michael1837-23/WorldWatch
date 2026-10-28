@@ -45,7 +45,8 @@ struct WorldMapCanvas: View {
                 context.stroke(path, with: .color(Color.primary.opacity(0.18)), lineWidth: 0.5)
             }
             if settings.night {
-                let south = max(-58, projection.bounds.south), north = min(82, projection.bounds.north)
+                // Shade the full frame height so the night side has no hard edge where the land data ends.
+                let south = max(-90, projection.bounds.south), north = min(90, projection.bounds.north)
                 let declination = sun.latitude * .pi / 180
                 if south < north {
                     var night = Path()

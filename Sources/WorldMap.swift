@@ -30,6 +30,13 @@ struct MapCountry: Sendable {
     }
 }
 
+/// Natural Earth's English names are formal ("People's Republic of China"); map labels and headline matching use common short forms.
+private let shortCountryNames = [
+    "CHN": "China", "USA": "United States", "COD": "DR Congo", "COG": "Congo", "CAF": "Central African Rep.",
+    "ARE": "UAE", "DOM": "Dominican Rep.", "BIH": "Bosnia", "TTO": "Trinidad", "CYN": "N. Cyprus",
+    "ATF": "French S. Lands", "GNQ": "Eq. Guinea"
+]
+
 enum WorldMap {
     static let countries: [MapCountry] = WorldMapData.encoded.split(separator: "\n").compactMap { line in
         let fields = line.split(separator: "|", omittingEmptySubsequences: false)
@@ -38,7 +45,7 @@ enum WorldMap {
             let values = ring.split(separator: ",").compactMap { Double($0) }
             return stride(from: 0, to: values.count - 1, by: 2).map { MapCoordinate(longitude: values[$0] / 10, latitude: values[$0 + 1] / 10) }
         }
-        return MapCountry(id: String(fields[0]), name: String(fields[1]), continent: String(fields[2]), rank: rank,
+        return MapCountry(id: String(fields[0]), name: shortCountryNames[String(fields[0])] ?? String(fields[1]), continent: String(fields[2]), rank: rank,
                           label: MapCoordinate(longitude: x / 10, latitude: y / 10), rings: rings)
     }
     static let ranked: [MapCountry] = countries.filter { $0.id != "ATA" }.sorted {
@@ -209,7 +216,8 @@ private let countryMatchers: [(MapCountry, NSRegularExpression)] = WorldMap.coun
 }
 
 func mapHotspots(_ events: [WorldEvent], now: Date = Date()) -> [MapHotspot] {
-    let recent = events.filter { !$0.disaster && $0.date.map { $0 <= now && $0 >= now.addingTimeInterval(-86400) } == true }
+    // Domestic feeds mention 中国 in most headlines, which would pin China as the top hotspot regardless of world news.
+    let recent = events.filter { !$0.disaster && !$0.isDomestic && $0.date.map { $0 <= now && $0 >= now.addingTimeInterval(-86400) } == true }
     return countryMatchers.compactMap { country, regex in
         let count = recent.reduce(0) { count, event in
             let title = event.title

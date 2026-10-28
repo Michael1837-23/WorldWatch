@@ -214,6 +214,13 @@ import Foundation
         assert(cityYouTubeIDs(youtubeHTML, city: CameraCity.all.first { $0.id == "beijing" }!).isEmpty)
         assert(bilibiliKeyframe(Data(#"{"data":{"live_status":1,"keyframe":"http://example.org/camera.jpg"}}"#.utf8))?.absoluteString == "https://example.org/camera.jpg")
         assert(bilibiliKeyframe(Data(#"{"data":{"live_status":0,"keyframe":"http://example.org/camera.jpg"}}"#.utf8)) == nil)
+        assert(bilibiliRoomIDs(#"<a href="//live.bilibili.com/3291055?x=1">a</a><a href="https://live.bilibili.com/h5/856077">b</a><a href="//live.bilibili.com/3291055">c</a>"#) == [3291055, 856077])
+        let beijing = CameraCity.all.first { $0.id == "beijing" }!, chongqing = CameraCity.all.first { $0.id == "chongqing" }!
+        assert(bilibiliSceneTitle("窗外街景｜北京朝阳大悦城实时街景", city: beijing))
+        assert(!bilibiliSceneTitle("【直播】重庆狼队 vs 长沙TES.A", city: chongqing) && !bilibiliSceneTitle("窗外街景｜北京朝阳大悦城实时街景", city: chongqing), "排除电竞与其他城市")
+        assert(WorldMap.countries.first { $0.id == "CHN" }?.name == "China" && WorldMap.countries.first { $0.id == "USA" }?.name == "United States")
+        assert(mapHotspots([headline("china-en", "China announces export rules", "bbc", 1)], now: now).first?.countryID == "CHN", "英文 China 计入中国")
+        assert(mapHotspots([headline("china-domestic", "中国发布新规", "cns-china", 1)], now: now).isEmpty, "国内来源不计入热点")
         assert(cameraJPEG(Data(repeating: 0, count: 6000)) == nil)
         assert(cameraRotationIndex(entry: 19, city: 3, count: 1) == 0)
         assert((0..<4).map { cameraRotationIndex(entry: 0, city: $0, count: 3) } == [0, 1, 2, 0])
@@ -230,7 +237,7 @@ import Foundation
         assert(!captured && cameraStore.read("tokyo")?.frames.first?.file == cachedFrame.file && cameraStore.read("tokyo")?.fetchedAt == now && cameraStore.read("tokyo")?.error != nil)
         try FileManager.default.removeItem(at: temporary)
         print("PASS: 地震/GDACS坐标、旧缓存兼容、RSS 1.0/Atom、多国地图、投影四角、确定且无重叠的标签、昼夜与新闻热点边界")
-        print("PASS: 直播ID去重与城市过滤、B站开播状态和HTTPS、无效图片拒绝、四城错位轮换、截图缓存旧请求保护")
+        print("PASS: 直播ID去重与城市过滤、B站开播状态和HTTPS、B站房间号与街景标题过滤、国家短名与国内来源排除、无效图片拒绝、四城错位轮换、截图缓存旧请求保护")
         if let index = CommandLine.arguments.firstIndex(of: "--fixtures"), CommandLine.arguments.count > index + 1 {
             let directory = CommandLine.arguments[index + 1]
             for (id, file) in [("bbc", "BBCWorld"), ("bbc-zh", "BBCChinese"), ("guardian", "Guardian"), ("usgs", "USGS")] {
