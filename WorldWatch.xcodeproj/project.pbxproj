@@ -14,6 +14,14 @@
 		9F96913EF4AF09C832EC4AB2 /* Sources/TitleTranslation.swift in Sources */ = {isa = PBXBuildFile; fileRef = 29E513848D0A091475AA8881 /* Sources/TitleTranslation.swift */; };
 		BD1D448A0FE4BBAB9AF603C2 /* Widget/WorldWatchWidget.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0EA25E3A1CC48DA83094F662 /* Widget/WorldWatchWidget.swift */; };
 		E374912D207EC189E588ECA7 /* WorldWatchWidget.appex in Embed App Extensions */ = {isa = PBXBuildFile; fileRef = BE4175710B03A81B1E49027A /* WorldWatchWidget.appex */; settings = {ATTRIBUTES = (CodeSignOnCopy, RemoveHeadersOnCopy, ); }; };
+		FA7E0520D0C64C09C92D1268 /* Sources/WorldMapData.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9C8E3C2ED9F709BCE0D86589 /* Sources/WorldMapData.swift */; };
+		5FBD7114D68860CF5594956F /* Sources/WorldMapData.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9C8E3C2ED9F709BCE0D86589 /* Sources/WorldMapData.swift */; };
+		1EC6C214E1EF52EBD7EB0908 /* Sources/WorldMap.swift in Sources */ = {isa = PBXBuildFile; fileRef = 36CBA806AB64D570D537E85F /* Sources/WorldMap.swift */; };
+		632EEC28D5D46D7BD63BA3F0 /* Sources/WorldMap.swift in Sources */ = {isa = PBXBuildFile; fileRef = 36CBA806AB64D570D537E85F /* Sources/WorldMap.swift */; };
+		EA639130368EB985DD973635 /* Sources/CameraSnapshots.swift in Sources */ = {isa = PBXBuildFile; fileRef = B158B91888D30F3F6464613A /* Sources/CameraSnapshots.swift */; };
+		5450D7FCB3447E62A3F7E361 /* Sources/CameraSnapshots.swift in Sources */ = {isa = PBXBuildFile; fileRef = B158B91888D30F3F6464613A /* Sources/CameraSnapshots.swift */; };
+		C4E678358C8FEB33899FCB86 /* Sources/WorldComponents.swift in Sources */ = {isa = PBXBuildFile; fileRef = E0AF200828D9A42BDE31090C /* Sources/WorldComponents.swift */; };
+		43B8D4896DB1430475BB0CCA /* Sources/WorldComponents.swift in Sources */ = {isa = PBXBuildFile; fileRef = E0AF200828D9A42BDE31090C /* Sources/WorldComponents.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -50,6 +58,10 @@
 		732EEBB2D95E04931E101BD8 /* Config/AppInfo.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Config/AppInfo.plist; sourceTree = "<group>"; };
 		B41E5772E2D15458F0E4579D /* Widget/Widget.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = Widget/Widget.entitlements; sourceTree = "<group>"; };
 		BE4175710B03A81B1E49027A /* WorldWatchWidget.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = WorldWatchWidget.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		9C8E3C2ED9F709BCE0D86589 /* Sources/WorldMapData.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/WorldMapData.swift; sourceTree = "<group>"; };
+		36CBA806AB64D570D537E85F /* Sources/WorldMap.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/WorldMap.swift; sourceTree = "<group>"; };
+		B158B91888D30F3F6464613A /* Sources/CameraSnapshots.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/CameraSnapshots.swift; sourceTree = "<group>"; };
+		E0AF200828D9A42BDE31090C /* Sources/WorldComponents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/WorldComponents.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -82,6 +94,10 @@
 		19F479106CE8C3BA8C106518 = {
 			isa = PBXGroup;
 			children = (
+				9C8E3C2ED9F709BCE0D86589 /* Sources/WorldMapData.swift */,
+				36CBA806AB64D570D537E85F /* Sources/WorldMap.swift */,
+				B158B91888D30F3F6464613A /* Sources/CameraSnapshots.swift */,
+				E0AF200828D9A42BDE31090C /* Sources/WorldComponents.swift */,
 				0919673DCA7150AD018ADE99 /* Sources/Feed.swift */,
 				29E513848D0A091475AA8881 /* Sources/TitleTranslation.swift */,
 				6185E5E3CBE8CAE938D4BBDB /* Sources/Main.swift */,
@@ -194,6 +210,10 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				5FBD7114D68860CF5594956F /* Sources/WorldMapData.swift in Sources */,
+				632EEC28D5D46D7BD63BA3F0 /* Sources/WorldMap.swift in Sources */,
+				5450D7FCB3447E62A3F7E361 /* Sources/CameraSnapshots.swift in Sources */,
+				43B8D4896DB1430475BB0CCA /* Sources/WorldComponents.swift in Sources */,
 				75F55193F40ACB5988FAECEC /* Sources/Feed.swift in Sources */,
 				9F96913EF4AF09C832EC4AB2 /* Sources/TitleTranslation.swift in Sources */,
 				BD1D448A0FE4BBAB9AF603C2 /* Widget/WorldWatchWidget.swift in Sources */,
@@ -204,6 +224,10 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				FA7E0520D0C64C09C92D1268 /* Sources/WorldMapData.swift in Sources */,
+				1EC6C214E1EF52EBD7EB0908 /* Sources/WorldMap.swift in Sources */,
+				EA639130368EB985DD973635 /* Sources/CameraSnapshots.swift in Sources */,
+				C4E678358C8FEB33899FCB86 /* Sources/WorldComponents.swift in Sources */,
 				61384AF44E0744B119575A58 /* Sources/Feed.swift in Sources */,
 				2B6F95DC2E644C68FAD9BDF1 /* Sources/TitleTranslation.swift in Sources */,
 				26D02D6FA8718473153D55DD /* Sources/Main.swift in Sources */,

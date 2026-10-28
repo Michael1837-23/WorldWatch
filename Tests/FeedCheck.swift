@@ -2,10 +2,28 @@ import Foundation
 
 @main struct FeedCheck {
     static func main() async throws {
+        if CommandLine.arguments.contains("--cameras") {
+            let store = CameraSnapshotStore(root: URL(fileURLWithPath: FileManager.default.currentDirectoryPath).appendingPathComponent(".build/camera-probe"))
+            let service = CameraService(store: store)
+            let flag = CommandLine.arguments.firstIndex(of: "--cameras")!
+            let requested = CommandLine.arguments.dropFirst(flag + 1).first
+            let cities = requested.map { wanted in CameraCity.all.filter { $0.id == wanted } } ?? CameraCity.all
+            for start in stride(from: 0, to: cities.count, by: 4) {
+                _ = await service.refresh(cities: Array(cities[start..<min(start + 4, cities.count)]), budget: 50, force: true)
+            }
+            for city in cities {
+                let manifest = store.read(city.id)
+                print("\(manifest?.frames.isEmpty == false ? "PASS" : "FAIL") \(city.name): \(manifest?.frames.count ?? 0) 张 · \(manifest?.error ?? "成功")")
+                for frame in manifest?.frames ?? [] { print("  \(frame.sourceType) · \(frame.page.absoluteString) · \(frame.imageURL.absoluteString)") }
+            }
+            return
+        }
         if CommandLine.arguments.contains("--live") {
             var failures = 0
+            let flag = CommandLine.arguments.firstIndex(of: "--live")!
+            let requested = CommandLine.arguments.dropFirst(flag + 1).first
             await withTaskGroup(of: (String, Int?, String?).self) { group in
-                for source in NewsSource.all {
+                for source in NewsSource.all where requested == nil || source.id == requested {
                     group.addTask {
                         do { return (source.name, try await fetchSource(source).count, nil) }
                         catch { return (source.name, nil, error.localizedDescription) }
@@ -156,6 +174,63 @@ import Foundation
         assert(snapshotStore.read()?.date == offline.date)
         try FileManager.default.removeItem(at: temporary)
         print("PASS: 摘要去重、检查/内容时间区分、部分失败与离线缓存、空来源清理、来源开关同步、旧请求写入保护")
+        let locatedQuake = Data(#"{"features":[{"id":"point","properties":{"title":"M 6.8","mag":6.8,"time":1792886400000,"url":"https://example.org/q"},"geometry":{"coordinates":[121.5,23.4,10]}}]}"#.utf8)
+        let located = try parseFeed(locatedQuake, source: NewsSource.all.first { $0.id == "usgs" }!)[0]
+        assert(located.longitude == 121.5 && located.latitude == 23.4 && located.magnitude == 6.8)
+        let pointXML = #"<rss xmlns:geo="http://www.w3.org/2003/01/geo/wgs84_pos#" xmlns:gdacs="http://www.gdacs.org"><channel><item><title>Red flood</title><link>https://example.org/flood</link><gdacs:alertlevel>Red</gdacs:alertlevel><geo:Point><geo:lat>25.1</geo:lat><geo:long>120.2</geo:long></geo:Point></item></channel></rss>"#
+        let flood = try parseFeed(Data(pointXML.utf8), source: gdacs)[0]
+        assert(flood.latitude == 25.1 && flood.longitude == 120.2 && legacy.latitude == nil && legacy.longitude == nil)
+        assert(mapMarkers([located, flood]).count == 2)
+        let rdf = #"<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns="http://purl.org/rss/1.0/" xmlns:dc="http://purl.org/dc/elements/1.1/"><item><title>DW international</title><link>https://example.org/dw</link><dc:date>2026-10-27T12:00:00Z</dc:date></item></rdf:RDF>"#
+        let rdfEvents = try parseFeed(Data(rdf.utf8), source: source)
+        assert(rdfEvents.first?.date == now)
+        let atom = #"<feed xmlns="http://www.w3.org/2005/Atom"><entry><title>Atom report</title><link rel="alternate" href="https://example.org/atom"/><updated>2026-10-27T12:00:00Z</updated></entry></feed>"#
+        let atomEvents = try parseFeed(Data(atom.utf8), source: source)
+        assert(atomEvents.first?.url.absoluteString == "https://example.org/atom")
+        let cnaEvents = try parseFeed(Data("<rss><channel><item><title>美國與日本舉行會議</title><link>https://example.org/cna</link></item></channel></rss>".utf8), source: NewsSource.all.first { $0.id == "cna" }!)
+        assert(cnaEvents.first?.displayTitle == "美国与日本举行会议" && cnaEvents.first?.title == "美國與日本舉行會議")
+        assert(WorldMap.countries.count > 150)
+        for id in ["CHN", "USA", "JPN"] { assert(WorldMap.countries.contains { $0.id == id && !$0.name.isEmpty && !$0.rings.isEmpty }) }
+        let projection = MapProjection(bounds: .init(west: -180, east: 180, south: -90, north: 90), size: CGSize(width: 360, height: 180), fit: false)
+        assert(projection.point(.init(longitude: 0, latitude: 0)) == CGPoint(x: 180, y: 90))
+        for (coordinate, expected) in [(MapCoordinate(longitude: -180, latitude: 90), CGPoint.zero), (.init(longitude: 180, latitude: -90), CGPoint(x: 360, y: 180)), (.init(longitude: -180, latitude: -90), CGPoint(x: 0, y: 180)), (.init(longitude: 180, latitude: 90), CGPoint(x: 360, y: 0))] { assert(projection.point(coordinate) == expected) }
+        let labelProjection = MapProjection(bounds: MapRegion.world.bounds, size: CGSize(width: 400, height: 200))
+        let labels = mapLabels(projection: labelProjection)
+        assert(labels == mapLabels(projection: labelProjection))
+        for a in labels.indices { for b in labels.indices where a < b { assert(!labels[a].rect.intersects(labels[b].rect)) } }
+        let larger = mapLabels(projection: MapProjection(bounds: MapRegion.world.bounds, size: CGSize(width: 800, height: 400)))
+        assert(larger.count >= labels.count && larger.count <= 30)
+        assert(abs(solarPosition(at: parseDate("2026-06-21T12:00:00Z")!).latitude - 23.4) < 1)
+        assert(abs(solarPosition(at: parseDate("2026-12-21T12:00:00Z")!).latitude + 23.4) < 1)
+        let sun = solarPosition(at: now)
+        assert(!isNight(sun, sun: sun))
+        assert(isNight(.init(longitude: sun.longitude + 180, latitude: -sun.latitude), sun: sun))
+        let hits = mapHotspots([headline("israel-en", "Israel ceasefire", "bbc", 1), headline("israel-zh", "以色列停火", "cns-world", 2), headline("ireland", "Ireland opens a museum", "bbc", 3)], now: now)
+        assert(hits.first { $0.countryID == "ISR" }?.count == 4)
+        assert(!hits.contains { $0.countryID == "IRN" })
+        assert(youtubeVideoIDs(#"{"videoId":"abcdefghijk"}{"videoId":"123456789_-"}{"videoId":"abcdefghijk"}"#) == ["abcdefghijk", "123456789_-"])
+        let youtubeHTML = #"<script>var ytInitialData = {"contents":[{"videoRenderer":{"videoId":"abcdefghijk","title":{"runs":[{"text":"Tokyo Shibuya live camera"}]},"badges":[{"metadataBadgeRenderer":{"style":"BADGE_STYLE_TYPE_LIVE_NOW"}}]}},{"videoRenderer":{"videoId":"123456789_-","title":{"runs":[{"text":"Paris SkylineWebcams"}]},"badges":[{"metadataBadgeRenderer":{"style":"BADGE_STYLE_TYPE_LIVE_NOW"}}]}}]};</script>"#
+        assert(cityYouTubeIDs(youtubeHTML, city: CameraCity.all.first { $0.id == "tokyo" }!) == ["abcdefghijk"])
+        assert(cityYouTubeIDs(youtubeHTML, city: CameraCity.all.first { $0.id == "beijing" }!).isEmpty)
+        assert(bilibiliKeyframe(Data(#"{"data":{"live_status":1,"keyframe":"http://example.org/camera.jpg"}}"#.utf8))?.absoluteString == "https://example.org/camera.jpg")
+        assert(bilibiliKeyframe(Data(#"{"data":{"live_status":0,"keyframe":"http://example.org/camera.jpg"}}"#.utf8)) == nil)
+        assert(cameraJPEG(Data(repeating: 0, count: 6000)) == nil)
+        assert(cameraRotationIndex(entry: 19, city: 3, count: 1) == 0)
+        assert((0..<4).map { cameraRotationIndex(entry: 0, city: $0, count: 3) } == [0, 1, 2, 0])
+        assert((0..<4).map { cameraRotationIndex(entry: 1, city: $0, count: 3) } == [1, 2, 0, 1])
+        let cameraStore = CameraSnapshotStore(root: temporary.appendingPathComponent("Cameras"))
+        let latestCamera = CameraManifest(checkedAt: now, fetchedAt: now, frames: [], error: nil)
+        try cameraStore.write(latestCamera, city: "tokyo")
+        let acceptedCamera = try cameraStore.write(.init(checkedAt: now.addingTimeInterval(-1), frames: [], error: "older"), city: "tokyo")
+        assert(!acceptedCamera && cameraStore.read("tokyo")?.checkedAt == now)
+        let cachedFrame = CameraFrame(file: "batch/0.jpg", sourceType: "测试", page: URL(string: "https://example.org/camera")!, imageURL: URL(string: "https://example.org/image.jpg")!, fetchedAt: now)
+        try cameraStore.write(.init(checkedAt: now, fetchedAt: now, frames: [cachedFrame], error: nil), city: "tokyo")
+        let failedCity = CameraCity(id: "tokyo", name: "东京", keywords: [], candidates: [])
+        let captured = await CameraService(store: cameraStore).refresh(cities: [failedCity], force: true)
+        assert(!captured && cameraStore.read("tokyo")?.frames.first?.file == cachedFrame.file && cameraStore.read("tokyo")?.fetchedAt == now && cameraStore.read("tokyo")?.error != nil)
+        try FileManager.default.removeItem(at: temporary)
+        print("PASS: 地震/GDACS坐标、旧缓存兼容、RSS 1.0/Atom、多国地图、投影四角、确定且无重叠的标签、昼夜与新闻热点边界")
+        print("PASS: 直播ID去重与城市过滤、B站开播状态和HTTPS、无效图片拒绝、四城错位轮换、截图缓存旧请求保护")
         if let index = CommandLine.arguments.firstIndex(of: "--fixtures"), CommandLine.arguments.count > index + 1 {
             let directory = CommandLine.arguments[index + 1]
             for (id, file) in [("bbc", "BBCWorld"), ("bbc-zh", "BBCChinese"), ("guardian", "Guardian"), ("usgs", "USGS")] {

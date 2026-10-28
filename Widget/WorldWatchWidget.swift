@@ -201,12 +201,139 @@ struct WorldWatchWidgetView: View {
     }
 }
 
-@main struct WorldWatchWidget: Widget {
+struct WorldWatchWidget: Widget {
     let kind = "WorldWatchNews"
     var body: some WidgetConfiguration {
         StaticConfiguration(kind: kind, provider: WorldWatchProvider()) { entry in WorldWatchWidgetView(entry: entry) }
             .configurationDisplayName("世界动态")
             .description("国内外政治、财经、科技、文娱、体育与灾害。可在应用中选择最新优先或综合轮播，更新时间由 macOS 调度。")
             .supportedFamilies([.systemSmall, .systemMedium, .systemLarge])
+    }
+}
+
+struct WorldComponentEntry: TimelineEntry {
+    let date: Date
+    let events: [WorldEvent]
+    let markers: [MapMarker]
+    let hotspots: [MapHotspot]
+    let sun: MapCoordinate
+    let settings: MapSettings
+    let cities: [CameraCity]
+    let frames: [String: [CameraFrame]]
+    let index: Int
+}
+
+struct WorldComponentProvider: TimelineProvider {
+    var cameras = true
+    var news = true
+    func placeholder(in context: Context) -> WorldComponentEntry { entries(snapshot: nil, minutes: 1)[0] }
+    func getSnapshot(in context: Context, completion: @escaping (WorldComponentEntry) -> Void) {
+        completion(entries(snapshot: NewsSnapshotStore.shared.read(), minutes: 1)[0])
+    }
+    func getTimeline(in context: Context, completion: @escaping (Timeline<WorldComponentEntry>) -> Void) {
+        Task {
+            let snapshot = NewsSnapshotStore.shared.read()
+            let stale = CameraCity.selected.filter { city in
+                CameraSnapshotStore.shared.read(city.id)?.fetchedAt.map { Date().timeIntervalSince($0) >= CameraCity.interval * 2 } ?? true
+            }
+            async let refreshed = refreshNews(snapshot)
+            if cameras && !stale.isEmpty { _ = await CameraService.shared.refresh(cities: stale, limit: 1, budget: 20) }
+            let latest = await refreshed
+            completion(Timeline(entries: entries(snapshot: latest), policy: .after(Date().addingTimeInterval(900))))
+        }
+    }
+    private func refreshNews(_ snapshot: NewsSnapshot?) async -> NewsSnapshot? {
+        if !news { return snapshot }
+        if let snapshot, Date().timeIntervalSince(snapshot.checkDate) < 900 { return snapshot }
+        return await WorldWatchProvider().load()
+    }
+    func entries(snapshot: NewsSnapshot?, now: Date = Date(), minutes: Int = 30) -> [WorldComponentEntry] {
+        let all = snapshot?.sourceFeeds?.values.flatMap(\.events) ?? snapshot?.rotationEvents ?? snapshot?.events ?? []
+        let retained = mergedEvents(all, now: now)
+        let markers = mapMarkers(retained), hotspots = mapHotspots(retained, now: now)
+        let mode = NewsDisplayMode.selected, pool = displayPool(retained, mode: mode, now: now)
+        let cities = CameraCity.selected, settings = MapSettings()
+        let frames = Dictionary(uniqueKeysWithValues: cities.map { ($0.id, CameraSnapshotStore.shared.read($0.id)?.frames ?? []) })
+        let minute = floor(now.timeIntervalSince1970 / 60) * 60
+        return (0..<max(1, minutes)).map { index in
+            let date = index == 0 ? now : Date(timeIntervalSince1970: minute + Double(index * 60))
+            let news = mode == .latest ? Array(pool.prefix(12)) : rotationEvents(pool, at: date, limit: 10).events
+            return WorldComponentEntry(date: date, events: news, markers: markers, hotspots: hotspots, sun: solarPosition(at: date),
+                                       settings: settings, cities: cities, frames: frames, index: Int(date.timeIntervalSince1970 / 60))
+        }
+    }
+}
+
+struct WorldComponentView: View {
+    @Environment(\.widgetFamily) var family
+    let entry: WorldComponentEntry
+    let kind: String
+    var cameraStore = CameraSnapshotStore.shared
+    var map: some View { WorldMapCanvas(markers: entry.markers, hotspots: entry.hotspots, sun: entry.sun, settings: entry.settings) }
+    var body: some View {
+        Group {
+            if kind == "WorldWatchMap" { map }
+            else if kind == "WorldWatchLive" {
+                CameraGrid(cities: entry.cities, frames: entry.frames, index: entry.index, rows: family == .systemMedium ? 1 : 2, store: cameraStore)
+            } else {
+                GeometryReader { geometry in
+                    HStack(spacing: 16) {
+                        VStack(spacing: 8) {
+                            map.frame(height: max(50, (geometry.size.height - 8) * 0.5))
+                            CameraGrid(cities: entry.cities, frames: entry.frames, index: entry.index, store: cameraStore)
+                        }
+                        .frame(width: max(0, (geometry.size.width - 16) * 0.52))
+                        FillingStack(spacing: 9) {
+                            ForEach(entry.events) { event in WidgetRow(event: event, family: .systemLarge) }
+                        }
+                        .clipped()
+                    }
+                }
+            }
+        }
+        .buttonStyle(.plain)
+        .multilineTextAlignment(.leading)
+        .containerBackground(.background, for: .widget)
+        .widgetURL(URL(string: "worldwatch://open"))
+        .environment(\.locale, Locale(identifier: "zh_CN"))
+    }
+}
+
+struct WorldDashboardWidget: Widget {
+    let kind = "WorldWatchDashboard"
+    var body: some WidgetConfiguration {
+        StaticConfiguration(kind: kind, provider: WorldComponentProvider()) { WorldComponentView(entry: $0, kind: kind) }
+            .configurationDisplayName("世界总览")
+            .description("世界地图、四座城市实景截图与新闻。新闻热点按提及量估计，非核实的冲突数据。")
+            .supportedFamilies([.systemExtraLarge])
+    }
+}
+
+struct WorldMapWidget: Widget {
+    let kind = "WorldWatchMap"
+    var body: some WidgetConfiguration {
+        StaticConfiguration(kind: kind, provider: WorldComponentProvider(cameras: false)) { WorldComponentView(entry: $0, kind: kind) }
+            .configurationDisplayName("世界地图")
+            .description("国家、地震、灾害与昼夜。新闻热点按提及量估计，非核实的冲突数据。")
+            .supportedFamilies([.systemLarge, .systemExtraLarge])
+    }
+}
+
+struct WorldLiveWidget: Widget {
+    let kind = "WorldWatchLive"
+    var body: some WidgetConfiguration {
+        StaticConfiguration(kind: kind, provider: WorldComponentProvider(news: false)) { WorldComponentView(entry: $0, kind: kind) }
+            .configurationDisplayName("世界实景")
+            .description("城市摄像头的定时截图轮播。城市与顺序在应用设置中调整。")
+            .supportedFamilies([.systemMedium, .systemLarge, .systemExtraLarge])
+    }
+}
+
+@main struct WorldWatchWidgets: WidgetBundle {
+    var body: some Widget {
+        WorldWatchWidget()
+        WorldDashboardWidget()
+        WorldMapWidget()
+        WorldLiveWidget()
     }
 }

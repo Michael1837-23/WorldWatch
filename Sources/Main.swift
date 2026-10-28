@@ -17,6 +17,10 @@ struct CachedFeed: Codable {
     @Published var widgetDisplayMode = NewsDisplayMode.selected
     @Published var rotationDate = Date()
     @Published var showSources = false
+    @Published var cameraCities = CameraCity.selected.map(\.id)
+    @Published var cameraInterval = CameraCity.interval
+    @Published var cameraManifests: [String: CameraManifest] = [:]
+    @Published var cameraRefreshing = false
     @Published var lastCheck: Date?
     @Published var translationConfiguration: TranslationSession.Configuration?
     @Published var translationStatus = "正在检查中英翻译语言…"
@@ -27,6 +31,8 @@ struct CachedFeed: Codable {
     var events: [WorldEvent] { mergedEvents(enabledSources.flatMap { feeds[$0.id]?.events ?? [] }) }
     var healthyCount: Int { enabledSources.filter { errors[$0.id] == nil && feeds[$0.id] != nil }.count }
     private var loop: Task<Void, Never>?
+    private var cameraLoop: Task<Void, Never>?
+    private var widgetReloadTask: Task<Void, Never>?
     private var lastWidgetReload = Date.distantPast
     private var requestedWidgetSnapshot: NewsSnapshot?
     private let cacheURL = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("WorldWatch/feeds.json")
@@ -38,6 +44,7 @@ struct CachedFeed: Codable {
             UserDefaults.standard.set(true, forKey: "expandedNewsV22")
         }
         if let data = try? Data(contentsOf: cacheURL), let cache = try? JSONDecoder().decode([String: CachedFeed].self, from: data) { feeds = cache }
+        readCameras()
     }
     func start() {
         loop?.cancel()
@@ -60,7 +67,7 @@ struct CachedFeed: Codable {
             translationStatus = "正在准备中英翻译语言…"
             try await session.prepareTranslation()
             await translateTitles(using: session)
-            WidgetCenter.shared.reloadTimelines(ofKind: "WorldWatchNews")
+            requestWidgetReload(force: true)
         } catch { translationStatus = "中文翻译未就绪：\(error.localizedDescription)" }
     }
     func translateTitles(using session: TranslationSession? = nil) async {
@@ -118,6 +125,65 @@ struct CachedFeed: Codable {
     func setInterval(_ seconds: Double) {
         interval = seconds; UserDefaults.standard.set(seconds, forKey: "refreshInterval"); start()
     }
+    var selectedCities: [CameraCity] { cameraCities.compactMap { id in CameraCity.all.first { $0.id == id } } }
+    func readCameras() {
+        cameraManifests = Dictionary(uniqueKeysWithValues: CameraCity.all.compactMap { city in
+            CameraSnapshotStore.shared.read(city.id).map { (city.id, $0) }
+        })
+    }
+    func startCameras() {
+        cameraLoop?.cancel()
+        cameraLoop = Task {
+            while !Task.isCancelled {
+                let began = Date()
+                await Task { await self.refreshCameras() }.value
+                do { try await Task.sleep(nanoseconds: UInt64(max(1, cameraInterval - Date().timeIntervalSince(began)) * 1_000_000_000)) }
+                catch { return }
+            }
+        }
+    }
+    func refreshCameras(force: Bool = false) async {
+        guard !cameraRefreshing else { return }
+        cameraRefreshing = true
+        defer { cameraRefreshing = false }
+        let changed = await CameraService.shared.refresh(cities: selectedCities, force: force)
+        readCameras()
+        if changed { requestWidgetReload() }
+    }
+    func setCameraInterval(_ value: Double) {
+        cameraInterval = value; CameraCity.interval = value; startCameras()
+        requestWidgetReload(force: true)
+    }
+    func toggleCity(_ city: CameraCity) {
+        if cameraCities.contains(city.id) { cameraCities.removeAll { $0 == city.id } }
+        else if cameraCities.count < 4 { cameraCities.append(city.id) }
+        WorldPreferences.shared.set(cameraCities, forKey: "cameraCities")
+        requestWidgetReload(force: true)
+        Task { await refreshCameras() }
+    }
+    func moveCity(_ id: String, direction: Int) {
+        guard let index = cameraCities.firstIndex(of: id), cameraCities.indices.contains(index + direction) else { return }
+        cameraCities.swapAt(index, index + direction)
+        WorldPreferences.shared.set(cameraCities, forKey: "cameraCities")
+        requestWidgetReload(force: true)
+    }
+    func setMapRegion(_ value: MapRegion) { MapRegion.selected = value; objectWillChange.send(); requestWidgetReload(force: true) }
+    func setMapLayer(_ key: String, enabled: Bool) { WorldPreferences.shared.set(enabled, forKey: key); objectWillChange.send(); requestWidgetReload(force: true) }
+    func requestWidgetReload(force: Bool = false) {
+        let delay = max(0, 55 - Date().timeIntervalSince(lastWidgetReload))
+        if force || delay == 0 {
+            widgetReloadTask?.cancel(); widgetReloadTask = nil
+            lastWidgetReload = Date()
+            requestedWidgetSnapshot = NewsSnapshotStore.shared.read()
+            for kind in ["WorldWatchNews", "WorldWatchDashboard", "WorldWatchMap", "WorldWatchLive"] { WidgetCenter.shared.reloadTimelines(ofKind: kind) }
+        } else if widgetReloadTask == nil {
+            widgetReloadTask = Task {
+                do { try await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000)) } catch { return }
+                widgetReloadTask = nil
+                requestWidgetReload(force: true)
+            }
+        }
+    }
     func refresh(reloadWidget: Bool = false) async {
         guard !refreshing else { return }
         refreshing = true
@@ -165,15 +231,13 @@ struct CachedFeed: Codable {
             !sameDigest($0.rotationEvents ?? $0.events, snapshot.rotationEvents ?? snapshot.events)
                 || ($0.rotationEvents ?? $0.events).map(\.displayTitle) != (snapshot.rotationEvents ?? snapshot.events).map(\.displayTitle)
                 || $0.mode != snapshot.mode || $0.availableSources != snapshot.availableSources || $0.enabledSourceIDs != snapshot.enabledSourceIDs
+                || !sameDigest(mergedEvents($0.sourceFeeds?.values.flatMap(\.events) ?? []), mergedEvents(snapshot.sourceFeeds?.values.flatMap(\.events) ?? []))
+                || mapMarkers($0.sourceFeeds?.values.flatMap(\.events) ?? []) != mapMarkers(snapshot.sourceFeeds?.values.flatMap(\.events) ?? [])
         } ?? true
         do {
             let saved = try store.write(snapshot)
             NSLog("组件摘要同步：shared=%@ checked=%.0f items=%ld", store.groupAvailable ? "YES" : "NO", snapshot.date.timeIntervalSince1970, snapshot.events.count)
-            if forceReload || (saved && changed && Date().timeIntervalSince(lastWidgetReload) >= 55) {
-                lastWidgetReload = Date()
-                requestedWidgetSnapshot = snapshot
-                WidgetCenter.shared.reloadTimelines(ofKind: "WorldWatchNews")
-            }
+            if forceReload || (saved && changed) { requestWidgetReload(force: forceReload) }
         } catch { NSLog("小组件共享摘要保存失败：%@", error.localizedDescription) }
     }
 }
@@ -217,6 +281,7 @@ struct EventRow: View {
 struct WorldView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @ObservedObject var store: EventStore
+    @State private var showCameras = false
     static let scopes = ["综合", "最新", "国内", "国际", "政治", "财经", "科技", "文娱", "体育", "灾害"]
     var rows: [WorldEvent] {
         if store.filter == "综合" {
@@ -255,6 +320,10 @@ struct WorldView: View {
                 Text("世界动态").font(.system(size: 22, weight: .bold))
                 Spacer()
                 Group {
+                    Button { showCameras.toggle() } label: {
+                        Image(systemName: showCameras ? "newspaper" : "video").frame(width: 28, height: 28)
+                    }
+                    .help(showCameras ? "返回新闻" : "城市实景").accessibilityLabel(showCameras ? "返回新闻" : "城市实景")
                     if store.refreshing {
                         ProgressView().controlSize(.small).frame(width: 28, height: 28)
                     } else {
@@ -307,7 +376,12 @@ struct WorldView: View {
     }
 
     @ViewBuilder var content: some View {
-        if rows.isEmpty {
+        if showCameras {
+            TimelineView(.periodic(from: .now, by: 60)) { context in
+                CameraGrid(cities: store.selectedCities, frames: store.cameraManifests.mapValues(\.frames), index: Int(context.date.timeIntervalSince1970 / 60))
+                    .padding(12)
+            }
+        } else if rows.isEmpty {
             ContentUnavailableView {
                 if store.refreshing { Label("正在获取新闻", systemImage: "antenna.radiowaves.left.and.right") }
                 else if store.enabledSources.isEmpty { Label("尚未选择来源", systemImage: "newspaper") }
@@ -373,6 +447,44 @@ struct SettingsView: View {
                     Button("准备本机翻译语言") { store.prepareChinese() }
                 }
                 Section {
+                    Picker("地图范围", selection: Binding(get: { MapRegion.selected }, set: { store.setMapRegion($0) })) {
+                        ForEach(MapRegion.allCases, id: \.self) { Text($0.rawValue).tag($0) }
+                    }
+                    ForEach([("mapEarthquakes", "地震"), ("mapDisasters", "灾害预警"), ("mapNight", "昼夜分界"), ("mapHotspots", "新闻热点")], id: \.0) { key, label in
+                        Toggle(label, isOn: Binding(get: { WorldPreferences.enabled(key) }, set: { store.setMapLayer(key, enabled: $0) }))
+                    }
+                } header: { Text("世界地图") } footer: {
+                    Text("按新闻提及量估计，非核实的冲突数据").foregroundStyle(.secondary)
+                }
+                Section {
+                    Picker("抓取间隔", selection: Binding(get: { store.cameraInterval }, set: { store.setCameraInterval($0) })) {
+                        ForEach([5, 10, 15, 30], id: \.self) { Text("\($0) 分钟").tag(Double($0 * 60)) }
+                    }
+                    ForEach(store.selectedCities + CameraCity.all.filter { !store.cameraCities.contains($0.id) }) { city in
+                        HStack {
+                            Toggle(isOn: Binding(get: { store.cameraCities.contains(city.id) }, set: { _ in store.toggleCity(city) })) {
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(city.name)
+                                    if let manifest = store.cameraManifests[city.id] {
+                                        if let error = manifest.error { Text(error).foregroundStyle(.orange).font(.system(size: 11)) }
+                                        else if let date = manifest.fetchedAt { Text("\(shortTimeLabel(date)) 成功获取").foregroundStyle(.secondary).font(.system(size: 11)) }
+                                    } else { Text("等待获取实景截图").foregroundStyle(.secondary).font(.system(size: 11)) }
+                                }
+                            }
+                            .accessibilityLabel(city.name)
+                            .disabled(!store.cameraCities.contains(city.id) && store.cameraCities.count >= 4)
+                            if let index = store.cameraCities.firstIndex(of: city.id) {
+                                Button { store.moveCity(city.id, direction: -1) } label: { Image(systemName: "chevron.up") }
+                                    .disabled(index == 0).accessibilityLabel("上移\(city.name)")
+                                Button { store.moveCity(city.id, direction: 1) } label: { Image(systemName: "chevron.down") }
+                                    .disabled(index == store.cameraCities.count - 1).accessibilityLabel("下移\(city.name)")
+                            }
+                        }
+                    }
+                } header: { Text("城市实景") } footer: {
+                    Text("已选 \(store.cameraCities.count)/4 座城市，最多选择 4 座，可上下调整显示顺序。画面为定时截图轮播；来源失效时自动尝试其他候选，全部失败则保留旧图。").foregroundStyle(.secondary)
+                }
+                Section {
                     ForEach(NewsSource.all) { source in
                         Toggle(isOn: Binding(get: { !store.disabled.contains(source.id) }, set: { _ in store.toggle(source) })) {
                             VStack(alignment: .leading, spacing: 2) {
@@ -434,6 +546,7 @@ struct SettingsView: View {
         item.menu = menu
         panel.orderFrontRegardless()
         store.start()
+        store.startCameras()
         // In-app "设置" buttons set showSources; present the standalone settings window instead of a sheet.
         settingsRequest = store.$showSources.filter { $0 }.receive(on: DispatchQueue.main).sink { [weak self] _ in
             self?.store.showSources = false

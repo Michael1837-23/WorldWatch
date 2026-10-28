@@ -13,6 +13,7 @@ struct NewsSource: Identifiable, Sendable {
     let disaster: Bool
     var category: NewsCategory = .world
     var domestic: Bool = false
+    var language: String = "en"
     static let all: [NewsSource] = [
         .init(id: "bbc-zh", name: "BBC 中文", url: URL(string: "https://feeds.bbci.co.uk/zhongwen/simp/rss.xml")!, detail: "中文国际报道", disaster: false),
         .init(id: "bbc", name: "BBC World", url: URL(string: "https://feeds.bbci.co.uk/news/world/rss.xml")!, detail: "全球国际新闻 · 英文", disaster: false),
@@ -32,6 +33,14 @@ struct NewsSource: Identifiable, Sendable {
         .init(id: "cnbc", name: "CNBC", url: URL(string: "https://www.cnbc.com/id/100003114/device/rss/rss.html")!, detail: "国际财经快讯 · 英文", disaster: false, category: .finance),
         .init(id: "techcrunch", name: "TechCrunch", url: URL(string: "https://techcrunch.com/feed/")!, detail: "AI、创业与科技产业 · 英文", disaster: false, category: .technology),
         .init(id: "variety", name: "Variety", url: URL(string: "https://variety.com/feed/")!, detail: "影视娱乐与传媒产业 · 英文", disaster: false, category: .entertainment),
+        .init(id: "dw", name: "DW", url: URL(string: "https://rss.dw.com/rdf/rss-en-all")!, detail: "德国之声国际报道 · 英文", disaster: false),
+        .init(id: "france24", name: "France 24", url: URL(string: "https://www.france24.com/en/rss")!, detail: "法国国际新闻 · 英文", disaster: false),
+        .init(id: "npr", name: "NPR News", url: URL(string: "https://feeds.npr.org/1001/rss.xml")!, detail: "美国公共广播新闻 · 英文", disaster: false),
+        .init(id: "cna", name: "中央通讯社", url: URL(string: "https://feeds.feedburner.com/rsscna/intworld")!, detail: "中央社国际新闻 · 中文", disaster: false, language: "zh"),
+        .init(id: "nyt", name: "NYT World", url: URL(string: "https://rss.nytimes.com/services/xml/rss/nyt/World.xml")!, detail: "纽约时报国际报道 · 英文", disaster: false),
+        .init(id: "aljazeera", name: "Al Jazeera", url: URL(string: "https://www.aljazeera.com/xml/rss/all.xml")!, detail: "半岛电视台国际报道 · 英文", disaster: false),
+        .init(id: "defense", name: "Defense News", url: URL(string: "https://www.defensenews.com/arc/outboundfeeds/rss/?outputType=xml")!, detail: "国防与军事产业 · 英文", disaster: false, category: .politics),
+        .init(id: "un", name: "联合国新闻", url: URL(string: "https://news.un.org/feed/subscribe/en/news/all/rss.xml")!, detail: "联合国官方新闻 · 英文", disaster: false),
         .init(id: "usgs", name: "USGS", url: URL(string: "https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/significant_week.geojson")!, detail: "近七天显著地震 · 官方数据", disaster: true),
         .init(id: "gdacs", name: "GDACS", url: URL(string: "https://www.gdacs.org/xml/rss.xml")!, detail: "橙色／红色灾害预警", disaster: true)
     ]
@@ -47,6 +56,9 @@ struct WorldEvent: Identifiable, Codable, Sendable {
     let disaster: Bool
     let severity: String?
     var translatedTitle: String? = nil
+    var latitude: Double? = nil
+    var longitude: Double? = nil
+    var magnitude: Double? = nil
     var displayTitle: String { translatedTitle ?? title }
     var sourceName: String { NewsSource.all.first { $0.id == sourceID }?.name ?? sourceID }
     var isDomestic: Bool { NewsSource.all.first { $0.id == sourceID }?.domestic ?? false }
@@ -365,7 +377,7 @@ final class RSSReader: NSObject, XMLParserDelegate {
     let source: NewsSource
     var events: [WorldEvent] = []
     private var fields: [String: String] = [:]
-    private var key = ""
+    private var path: [String] = []
     private var inItem = false
     private var foundRSS = false
     private var depth = 0
@@ -378,19 +390,22 @@ final class RSSReader: NSObject, XMLParserDelegate {
         return events
     }
     func parser(_ parser: XMLParser, didStartElement elementName: String, namespaceURI: String?, qualifiedName qName: String?, attributes attributeDict: [String: String] = [:]) {
-        if elementName == "rss" { foundRSS = true }
-        if elementName == "item" { inItem = true; fields = [:]; depth = 0; return }
-        if inItem { depth += 1; if depth == 1 { key = elementName.lowercased() } }
+        if ["rss", "rdf:rdf", "feed"].contains(elementName.lowercased()) { foundRSS = true }
+        if elementName == "item" || elementName == "entry" { inItem = true; fields = [:]; path = []; depth = 0; return }
+        if inItem {
+            depth += 1; path.append(elementName.lowercased())
+            if elementName == "link", let href = attributeDict["href"], attributeDict["rel"] == nil || attributeDict["rel"] == "alternate" { fields["link"] = href }
+        }
     }
     func parser(_ parser: XMLParser, foundCharacters string: String) {
-        if inItem { fields[key, default: ""] += string }
+        if inItem, let key = path.last, depth == 1 || key == "geo:lat" || key == "geo:long" { fields[key, default: ""] += string }
     }
     func parser(_ parser: XMLParser, foundCDATA CDATABlock: Data) {
-        if inItem, let string = String(data: CDATABlock, encoding: .utf8) { fields[key, default: ""] += string }
+        if inItem, let key = path.last, depth == 1, let string = String(data: CDATABlock, encoding: .utf8) { fields[key, default: ""] += string }
     }
     func parser(_ parser: XMLParser, didEndElement elementName: String, namespaceURI: String?, qualifiedName qName: String?) {
         guard inItem else { return }
-        if elementName != "item" { depth -= 1; return }
+        if elementName != "item" && elementName != "entry" { depth -= 1; if !path.isEmpty { path.removeLast() }; return }
         inItem = false
         let title = cleanTitle(fields["title"] ?? "")
         guard !title.isEmpty, let url = safeURL(fields["link"] ?? "") else { return }
@@ -398,16 +413,20 @@ final class RSSReader: NSObject, XMLParserDelegate {
         if source.id == "gdacs", alert != "red", alert != "orange" { return }
         let occurrence = source.id == "gdacs" ? parseDate(fields["gdacs:fromdate"]) : nil
         events.append(WorldEvent(id: source.id + ":" + url.absoluteString, sourceID: source.id, title: title, url: url,
-                                 date: occurrence ?? plausiblePublishDate(parseDate(fields["pubdate"] ?? fields["dc:date"])),
+                                 date: occurrence ?? plausiblePublishDate(parseDate(fields["pubdate"] ?? fields["dc:date"] ?? fields["published"] ?? fields["updated"])),
                                  timeKind: occurrence != nil ? "发生" : "发布", disaster: source.disaster,
-                                 severity: alert == "red" ? "红色预警" : alert == "orange" ? "橙色预警" : nil))
+                                 severity: alert == "red" ? "红色预警" : alert == "orange" ? "橙色预警" : nil,
+                                 translatedTitle: source.language == "zh" ? title.applyingTransform(StringTransform("Traditional-Simplified"), reverse: false) : nil,
+                                 latitude: fields["geo:lat"].flatMap { Double($0.trimmingCharacters(in: .whitespacesAndNewlines)) },
+                                 longitude: fields["geo:long"].flatMap { Double($0.trimmingCharacters(in: .whitespacesAndNewlines)) }))
     }
 }
 
 private struct EarthquakeFeed: Decodable {
     struct Feature: Decodable {
         struct Properties: Decodable { let title: String?; let place: String?; let mag: Double?; let time: Double?; let url: String? }
-        let id: String; let properties: Properties
+        struct Geometry: Decodable { let coordinates: [Double] }
+        let id: String; let properties: Properties; let geometry: Geometry?
     }
     let features: [Feature]
 }
@@ -420,7 +439,8 @@ func parseFeed(_ data: Data, source: NewsSource) throws -> [WorldEvent] {
         let magnitude = p.mag.map { String(format: "%.1f", $0) } ?? "未知"
         return WorldEvent(id: "usgs:" + feature.id, sourceID: source.id,
                           title: "显著地震 M\(magnitude) · \(p.place ?? title)", url: url,
-                          date: p.time.map { Date(timeIntervalSince1970: $0 / 1000) }, timeKind: "发生", disaster: true, severity: "显著地震")
+                          date: p.time.map { Date(timeIntervalSince1970: $0 / 1000) }, timeKind: "发生", disaster: true, severity: "显著地震",
+                          latitude: feature.geometry?.coordinates.dropFirst().first, longitude: feature.geometry?.coordinates.first, magnitude: p.mag)
     }
 }
 
@@ -448,7 +468,7 @@ func fetchSource(_ source: NewsSource, timeout: Double = 25) async throws -> [Wo
     var request = URLRequest(url: source.url)
     request.timeoutInterval = timeout
     request.cachePolicy = .reloadIgnoringLocalCacheData
-    request.setValue("WorldWatch/2.4 (personal desktop news reader)", forHTTPHeaderField: "User-Agent")
+    request.setValue("WorldWatch/2.5 (personal desktop news reader)", forHTTPHeaderField: "User-Agent")
     for attempt in 0..<2 {
         do {
             let (data, response) = try await newsSession.data(for: request)
