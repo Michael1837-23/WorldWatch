@@ -239,7 +239,10 @@ struct WorldComponentProvider: TimelineProvider {
             async let refreshed = refreshNews(snapshot)
             if cameras && !stale.isEmpty { _ = await CameraService.shared.refresh(cities: stale, limit: 1, budget: 20) }
             let latest = await refreshed
-            completion(Timeline(entries: entries(snapshot: latest), policy: .after(Date().addingTimeInterval(900))))
+            let timeline = entries(snapshot: latest)
+            let kind = news ? (cameras ? "WorldWatchDashboard" : "WorldWatchMap") : "WorldWatchLive"
+            NSLog("新组件时间线：%@ family=%@ entries=%ld", kind, String(describing: context.family), timeline.count)
+            completion(Timeline(entries: timeline, policy: .after(Date().addingTimeInterval(900))))
         }
     }
     private func refreshNews(_ snapshot: NewsSnapshot?) async -> NewsSnapshot? {
@@ -330,6 +333,9 @@ struct WorldLiveWidget: Widget {
 }
 
 @main struct WorldWatchWidgets: WidgetBundle {
+    init() {
+        NSLog("世界动态组件目录 2.5/9：WorldWatchNews、WorldWatchDashboard、WorldWatchMap、WorldWatchLive")
+    }
     var body: some Widget {
         WorldWatchWidget()
         WorldDashboardWidget()

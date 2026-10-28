@@ -135,9 +135,9 @@ struct CachedFeed: Codable {
         cameraLoop?.cancel()
         cameraLoop = Task {
             while !Task.isCancelled {
-                let began = Date()
                 await Task { await self.refreshCameras() }.value
-                do { try await Task.sleep(nanoseconds: UInt64(max(1, cameraInterval - Date().timeIntervalSince(began)) * 1_000_000_000)) }
+                // Freshness is measured from successful completion, so wait the full interval after each round.
+                do { try await Task.sleep(nanoseconds: UInt64(cameraInterval * 1_000_000_000)) }
                 catch { return }
             }
         }
