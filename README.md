@@ -1,6 +1,6 @@
 # 世界动态 · Mac 桌面组件
 
-原生 Swift / AppKit / SwiftUI 配套应用与 WidgetKit 小、中、大三种桌面组件。英文标题自动译为中文（悬停可看原文），点击标题打开原报道。当前版本 2.3（build 6），使用用户自己的 Apple Development 团队签名。
+原生 Swift / AppKit / SwiftUI 配套应用与 WidgetKit 小、中、大三种桌面组件。英文标题自动译为中文（悬停可看原文），点击标题打开原报道。当前版本 2.4（build 7），使用用户自己的 Apple Development 团队签名。
 
 ## 使用
 
