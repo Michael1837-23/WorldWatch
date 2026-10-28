@@ -259,7 +259,7 @@ struct WorldComponentProvider: TimelineProvider {
         let markers = mapMarkers(retained), hotspots = mapHotspots(retained, now: now)
         let mode = NewsDisplayMode.selected, pool = displayPool(retained, mode: mode, now: now)
         let cities = CameraCity.selected, settings = MapSettings()
-        let frames = Dictionary(uniqueKeysWithValues: cities.map { ($0.id, CameraSnapshotStore.shared.read($0.id)?.frames ?? []) })
+        let frames = Dictionary(uniqueKeysWithValues: cities.map { ($0.id, CameraSnapshotStore.shared.read($0.id)?.frames.filter(CameraOptions.allows) ?? []) })
         let spacing = Self.entrySpacing, slot = floor(now.timeIntervalSince1970 / spacing) * spacing
         return (0..<max(1, Int(Double(minutes * 60) / spacing))).map { index in
             let date = index == 0 ? now : Date(timeIntervalSince1970: slot + Double(index) * spacing)
@@ -337,7 +337,7 @@ struct WorldLiveWidget: Widget {
 
 @main struct WorldWatchWidgets: WidgetBundle {
     init() {
-        NSLog("世界动态组件目录 2.5/11：WorldWatchNews、WorldWatchDashboard、WorldWatchMap、WorldWatchLive")
+        NSLog("世界动态组件目录 2.6/12：WorldWatchNews、WorldWatchDashboard、WorldWatchMap、WorldWatchLive")
     }
     var body: some Widget {
         WorldWatchWidget()

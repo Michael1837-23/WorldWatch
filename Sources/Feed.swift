@@ -468,7 +468,7 @@ func fetchSource(_ source: NewsSource, timeout: Double = 25) async throws -> [Wo
     var request = URLRequest(url: source.url)
     request.timeoutInterval = timeout
     request.cachePolicy = .reloadIgnoringLocalCacheData
-    request.setValue("WorldWatch/2.5 (personal desktop news reader)", forHTTPHeaderField: "User-Agent")
+    request.setValue("WorldWatch/2.6 (personal desktop news reader)", forHTTPHeaderField: "User-Agent")
     for attempt in 0..<2 {
         do {
             let (data, response) = try await newsSession.data(for: request)

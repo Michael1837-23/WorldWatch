@@ -1,19 +1,29 @@
 import Foundation
+import CoreGraphics
+import ImageIO
+import UniformTypeIdentifiers
 
 @main struct FeedCheck {
     static func main() async throws {
         if CommandLine.arguments.contains("--cameras") {
             let store = CameraSnapshotStore(root: URL(fileURLWithPath: FileManager.default.currentDirectoryPath).appendingPathComponent(".build/camera-probe"))
             let service = CameraService(store: store)
+            let oldInterval = CameraCity.interval
+            CameraCity.interval = 300
+            defer { CameraCity.interval = oldInterval }
             let flag = CommandLine.arguments.firstIndex(of: "--cameras")!
             let requested = CommandLine.arguments.dropFirst(flag + 1).first
             let cities = requested.map { wanted in CameraCity.all.filter { $0.id == wanted } } ?? CameraCity.all
             for start in stride(from: 0, to: cities.count, by: 4) {
-                _ = await service.refresh(cities: Array(cities[start..<min(start + 4, cities.count)]), budget: 50, force: true)
+                _ = await service.refresh(cities: Array(cities[start..<min(start + 4, cities.count)]), budget: 90, force: true, resetCooldown: true, diagnostic: true)
             }
             for city in cities {
                 let manifest = store.read(city.id)
                 print("\(manifest?.frames.isEmpty == false ? "PASS" : "FAIL") \(city.name): \(manifest?.frames.count ?? 0) 张 · \(manifest?.error ?? "成功")")
+                for source in store.pool(city) {
+                    let record = store.health()[source.id] ?? CameraHealth()
+                    print("  来源 \(source.id) · \(record.state.title) · \(record.reason ?? "") · \(source.page.absoluteString)")
+                }
                 for frame in manifest?.frames ?? [] { print("  \(frame.sourceType) · \(frame.page.absoluteString) · \(frame.imageURL.absoluteString)") }
             }
             return
@@ -217,6 +227,9 @@ import Foundation
         assert(bilibiliRoomIDs(#"<a href="//live.bilibili.com/3291055?x=1">a</a><a href="https://live.bilibili.com/h5/856077">b</a><a href="//live.bilibili.com/3291055">c</a>"#) == [3291055, 856077])
         let beijing = CameraCity.all.first { $0.id == "beijing" }!, chongqing = CameraCity.all.first { $0.id == "chongqing" }!
         assert(bilibiliSceneTitle("窗外街景｜北京朝阳大悦城实时街景", city: beijing))
+        let newYork = CameraCity.all.first { $0.id == "newyork" }!
+        assert(bilibiliSceneTitle("纽约时代广场实时街景", city: newYork))
+        assert(!bilibiliSceneTitle("纽约街景点歌聊天", city: newYork))
         assert(!bilibiliSceneTitle("【直播】重庆狼队 vs 长沙TES.A", city: chongqing) && !bilibiliSceneTitle("窗外街景｜北京朝阳大悦城实时街景", city: chongqing), "排除电竞与其他城市")
         assert(WorldMap.countries.first { $0.id == "CHN" }?.name == "China" && WorldMap.countries.first { $0.id == "USA" }?.name == "United States")
         assert(mapHotspots([headline("china-en", "China announces export rules", "bbc", 1)], now: now).first?.countryID == "CHN", "英文 China 计入中国")
@@ -235,6 +248,152 @@ import Foundation
         let failedCity = CameraCity(id: "tokyo", name: "东京", keywords: [], candidates: [])
         let captured = await CameraService(store: cameraStore).refresh(cities: [failedCity], force: true)
         assert(!captured && cameraStore.read("tokyo")?.frames.first?.file == cachedFrame.file && cameraStore.read("tokyo")?.fetchedAt == now && cameraStore.read("tokyo")?.error != nil)
+        func cameraSample(_ variant: Int = 0, side: Int = 360, solid: Bool = false) -> Data {
+            let width = side, height = side * 2 / 3
+            var pixels = [UInt8](repeating: 255, count: width * height * 4)
+            var random: UInt64 = 123
+            for y in 0..<height { for x in 0..<width {
+                let column = x * 9 / width, row = y * 8 / height
+                var value = 45 + (column * 37 + row * 19) % 160
+                if row == 3 && column == 4 { value = variant == 1 ? 125 : 120 }
+                if row == 3 && column == 5 { value = 121 }
+                if variant == 2 { value = 255 - value }
+                if solid { value = 80 }
+                else { random = random &* 6364136223846793005 &+ 1; value += Int((random >> 32) % 7) - 3 }
+                for c in 0..<3 { pixels[(y * width + x) * 4 + c] = UInt8(clamping: value) }
+            } }
+            let provider = CGDataProvider(data: Data(pixels) as CFData)!
+            let image = CGImage(width: width, height: height, bitsPerComponent: 8, bitsPerPixel: 32,
+                bytesPerRow: width * 4, space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.noneSkipLast.rawValue),
+                provider: provider, decode: nil, shouldInterpolate: false, intent: .defaultIntent)!
+            let output = NSMutableData()
+            let destination = CGImageDestinationCreateWithData(output, UTType.png.identifier as CFString, 1, nil)!
+            CGImageDestinationAddImage(destination, image, nil); assert(CGImageDestinationFinalize(destination))
+            return output as Data
+        }
+        let sample = cameraSample(), fingerprint = CameraFingerprint.make(sample)!
+        let noise = CameraFingerprint.make(cameraSample(1))!, different = CameraFingerprint.make(cameraSample(2))!
+        assert(fingerprint.hash == CameraFingerprint.make(sample)!.hash)
+        let noiseDistance = (fingerprint.hash ^ noise.hash).nonzeroBitCount
+        assert(noiseDistance > 0 && noiseDistance <= 2, "轻微噪声的 dHash 距离小且非零：\(noiseDistance)")
+        assert((fingerprint.hash ^ different.hash).nonzeroBitCount > 30)
+        assert(fingerprint.bytes >= CameraThresholds.minimumBytes && fingerprint.deviation > 3)
+        var health = CameraHealth()
+        health.observe(fingerprint, modified: nil, now: now)
+        assert(health.state == .unverified && health.lastChanged == nil)
+        health.observe(fingerprint, modified: nil, now: now.addingTimeInterval(120))
+        assert(health.unchangedCount == 0 && health.lastComparedAt == now)
+        health.observe(fingerprint, modified: nil, now: now.addingTimeInterval(300))
+        assert(health.unchangedCount == 1)
+        health.observe(fingerprint, modified: nil, now: now.addingTimeInterval(600))
+        assert(health.state == .staticCover && health.cooldownUntil == now.addingTimeInterval(22200))
+        health.observe(different, modified: nil, now: now.addingTimeInterval(900))
+        assert(health.state == .live && health.unchangedCount == 0 && health.lastChanged == now.addingTimeInterval(900))
+        var noisyHealth = CameraHealth()
+        noisyHealth.observe(fingerprint, modified: nil, now: now)
+        noisyHealth.observe(noise, modified: nil, now: now.addingTimeInterval(300))
+        assert(noisyHealth.state == .live, "少量真实像素变化不误判为静态封面")
+        var failingHealth = CameraHealth()
+        for seconds in [600.0, 1800, 7200, 21600, 21600] {
+            failingHealth.fail(now: now, reason: "超时")
+            assert(failingHealth.state == .failing && failingHealth.cooldownUntil == now.addingTimeInterval(seconds))
+        }
+        var oldHealth = CameraHealth()
+        oldHealth.observe(fingerprint, modified: now.addingTimeInterval(-7201), now: now)
+        assert(oldHealth.state == .offline)
+        var solidHealth = CameraHealth()
+        solidHealth.observe(CameraFingerprint.make(cameraSample(solid: true))!, modified: nil, now: now)
+        assert(solidHealth.state == .offline)
+        var tinyHealth = CameraHealth()
+        tinyHealth.observe(CameraFingerprint.make(cameraSample(side: 90))!, modified: nil, now: now)
+        assert(tinyHealth.state == .offline)
+        let imageLink = URL(string: "https://example.org/scene.jpg")!
+        func testSource(_ id: String, _ platform: CameraPlatform = .official) -> CameraSource {
+            .init(id: id, platform: platform, title: id, imageURL: imageLink, page: imageLink)
+        }
+        let yt1 = testSource("yt1", .youtube), yt2 = testSource("yt2", .youtube), yt3 = testSource("yt3", .youtube), sky = testSource("sky", .skyline)
+        var rankingHealth = [yt1.id: health, yt2.id: health, yt3.id: health]
+        assert(rankedCameraSources([sky, yt1], health: rankingHealth, now: now.addingTimeInterval(1000)).first?.id == yt1.id)
+        rankingHealth[yt1.id]?.cooldownUntil = now.addingTimeInterval(2000)
+        assert(rankedCameraSources([yt1, sky], health: rankingHealth, now: now.addingTimeInterval(1000)).map(\.id) == [sky.id])
+        assert(rankedCameraSources([yt3, sky], health: rankingHealth, now: now.addingTimeInterval(1000), selected: [yt1, yt2]).first?.id == sky.id)
+        assert(rankedCameraSources([sky], health: [:], skyline: false).isEmpty)
+        assert(rankedCameraSources([yt1], health: [:], disabled: [yt1.id]).isEmpty)
+        let skylineHTML = #"<a href="en/webcam/united-states/new-york/new-york/times-square.html"><img src="https://cdn.skylinewebcams.com/live538.webp">Times Square</a><a href="/en/webcam/france/ile-de-france/paris/tour-eiffel.html"><img src="https://cdn.skylinewebcams.com/live955.jpg">Eiffel Tower</a>"#
+        let skyline = skylineSources(skylineHTML)
+        assert(skyline.map(\.id) == ["skyline:538", "skyline:955"])
+        assert(skyline[0].page.absoluteString == "https://www.skylinewebcams.com/en/webcam/united-states/new-york/new-york/times-square.html")
+        assert(youtubeLiveVideoID(#"<link rel="canonical" href="https://www.youtube.com/watch?v=abcdefghijk"><script>var x={"videoId":"recommend01"};</script>"#) == "abcdefghijk")
+        assert(youtubeLiveVideoID(#"{"videoDetails":{"videoId":"123456789_-","title":"Tokyo camera"}}"#) == "123456789_-")
+        assert(youtubeLiveVideoID(#"{"videoId":"recommend01"}"#) == nil)
+        assert(youtubeDeclaredLive(#"{"isLiveNow":false}"#) == false)
+        assert(youtubePlayerTitle(#"{"videoDetails":{"videoId":"abcdefghijk","title":"Tokyo camera"}}"#) == "Tokyo camera")
+        assert(cameraHTTPDate("Wed, 28 Oct 2026 12:00:00 GMT") != nil)
+        let legacyFrame = Data(#"{"file":"batch/0.jpg","sourceType":"官方摄像头","page":"https://example.org/camera","imageURL":"https://example.org/image.jpg","fetchedAt":0}"#.utf8)
+        let decodedFrame = try JSONDecoder().decode(CameraFrame.self, from: legacyFrame)
+        assert(decodedFrame.sourceID == nil && decodedFrame.platform == nil)
+        let legacyManifest = Data(#"{"checkedAt":0,"frames":[{"file":"batch/0.jpg","sourceType":"官方摄像头","page":"https://example.org/camera","imageURL":"https://example.org/image.jpg","fetchedAt":0}]}"#.utf8)
+        let oldManifest = try JSONDecoder().decode(CameraManifest.self, from: legacyManifest)
+        assert(oldManifest.frames.count == 1)
+        let fallbackStore = CameraSnapshotStore(root: temporary.appendingPathComponent("Fallback"))
+        let fallbackCity = CameraCity(id: "fixture", name: "样例", keywords: [], candidates: [])
+        let failed = testSource("a-failure"), cover = testSource("b-cover"), good = testSource("c-good")
+        try fallbackStore.writeState([fallbackCity.id: [failed, cover, good]], name: "sources.json")
+        var coverHealth = CameraHealth()
+        coverHealth.observe(fingerprint, modified: nil, now: Date().addingTimeInterval(-900))
+        coverHealth.observe(fingerprint, modified: nil, now: Date().addingTimeInterval(-600))
+        try fallbackStore.writeState([cover.id: coverHealth], name: "health.json")
+        // Separate URLs ensure a first-candidate transport failure and a second-candidate cover both fall through.
+        let distinctSources = [failed, cover, good].enumerated().map { index, source -> CameraSource in
+            var source = source; source.imageURL = URL(string: "https://example.org/\(index).png")!; return source
+        }
+        try fallbackStore.writeState([fallbackCity.id: distinctSources], name: "sources.json")
+        let fallbackService = CameraService(store: fallbackStore, request: { url, _ in
+            if url.lastPathComponent == "0.png" { throw URLError(.timedOut) }
+            return (sample, HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: ["Content-Type": "image/png"])!)
+        })
+        let fellThrough = await fallbackService.refresh(cities: [fallbackCity], limit: 1, force: true)
+        assert(fellThrough && fallbackStore.read(fallbackCity.id)?.frames.first?.sourceID == good.id)
+        assert(fallbackStore.health()[failed.id]?.state == .failing && fallbackStore.health()[cover.id]?.state == .staticCover)
+        assert(fallbackStore.sources()[fallbackCity.id]?.count == 3)
+        let sharedPageStore = CameraSnapshotStore(root: temporary.appendingPathComponent("SharedPage"))
+        try sharedPageStore.writeState([fallbackCity.id: distinctSources], name: "sources.json")
+        let sharedPageService = CameraService(store: sharedPageStore, request: { url, _ in
+            (sample, HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: ["Content-Type": "image/png"])!)
+        })
+        _ = await sharedPageService.refresh(cities: [fallbackCity], force: true)
+        assert(sharedPageStore.read(fallbackCity.id)?.frames.count == 3, "同一官方观看页的不同镜头均可轮播")
+        assert(CameraCity.all.flatMap(\.fixedSources).allSatisfy { !$0.page.absoluteString.contains("/en/webcam/en/webcam/") })
+        let migratedStore = CameraSnapshotStore(root: temporary.appendingPathComponent("Migrated"))
+        let shanghai = CameraCity.all.first { $0.id == "shanghai" }!
+        let correct = shanghai.fixedSources.first { $0.platform == .skyline }!
+        var incorrect = correct
+        incorrect.page = URL(string: "https://www.skylinewebcams.com/en/webcam/en/webcam/china/shanghai/shanghai/skyline-of-shanghai.html")!
+        try migratedStore.writeState([shanghai.id: [incorrect]], name: "sources.json")
+        var fetched = CameraHealth(); fetched.lastFetched = Date(); fetched.state = .live
+        try migratedStore.writeState([correct.id: fetched], name: "health.json")
+        try migratedStore.write(.init(checkedAt: Date(), frames: [.init(file: "batch/0.jpg", sourceType: "SkylineWebcams", page: incorrect.page,
+            imageURL: correct.imageURL, fetchedAt: Date(), sourceID: correct.id, platform: .skyline)], error: nil), city: shanghai.id)
+        let migratedService = CameraService(store: migratedStore, request: { _, _ in throw URLError(.notConnectedToInternet) })
+        _ = await migratedService.refresh(cities: [shanghai], limit: 1, force: true)
+        assert(migratedStore.read(shanghai.id)?.frames.first?.page == correct.page)
+        assert(migratedStore.sources()[shanghai.id]?.first { $0.id == correct.id }?.page == correct.page)
+        let intervalStore = CameraSnapshotStore(root: temporary.appendingPathComponent("Interval"))
+        let intervalSource = testSource("skyline:fixture", .skyline)
+        try intervalStore.writeState([fallbackCity.id: [intervalSource]], name: "sources.json")
+        var recent = CameraHealth()
+        recent.lastFetched = Date(); recent.state = .live
+        try intervalStore.writeState([intervalSource.id: recent], name: "health.json")
+        let intervalService = CameraService(store: intervalStore, request: { _, _ in
+            assertionFailure("立即检测也不得突破 Skyline 抓取间隔")
+            throw URLError(.timedOut)
+        })
+        _ = await intervalService.refresh(cities: [fallbackCity], force: true, resetCooldown: true)
+        assert(intervalStore.health()[intervalSource.id]?.failures == 0)
+
+        assert(CameraCity.all.map(\.englishName) == ["Beijing", "Shanghai", "Hong Kong", "Chongqing", "Tokyo", "Taipei", "New York", "Los Angeles", "Paris", "London"])
+        print("PASS: dHash 与微小像素变化、封面状态机、四分钟比较间隔、失败退避、过期/纯色/小图、平台分散、当轮失败及封面顺延、来源持久化、Skyline/频道解析与旧 manifest")
+
         try FileManager.default.removeItem(at: temporary)
         print("PASS: 地震/GDACS坐标、旧缓存兼容、RSS 1.0/Atom、多国地图、投影四角、确定且无重叠的标签、昼夜与新闻热点边界")
         print("PASS: 直播ID去重与城市过滤、B站开播状态和HTTPS、B站房间号与街景标题过滤、国家短名与国内来源排除、无效图片拒绝、四城错位轮换、截图缓存旧请求保护")

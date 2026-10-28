@@ -22,6 +22,8 @@
 		5450D7FCB3447E62A3F7E361 /* Sources/CameraSnapshots.swift in Sources */ = {isa = PBXBuildFile; fileRef = B158B91888D30F3F6464613A /* Sources/CameraSnapshots.swift */; };
 		C4E678358C8FEB33899FCB86 /* Sources/WorldComponents.swift in Sources */ = {isa = PBXBuildFile; fileRef = E0AF200828D9A42BDE31090C /* Sources/WorldComponents.swift */; };
 		43B8D4896DB1430475BB0CCA /* Sources/WorldComponents.swift in Sources */ = {isa = PBXBuildFile; fileRef = E0AF200828D9A42BDE31090C /* Sources/WorldComponents.swift */; };
+		8BE19D8D72F14D058745CA26 /* Sources/CameraSources.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7BE19D8D72F14D058745CA26; };
+		9BE19D8D72F14D058745CA26 /* Sources/CameraSources.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7BE19D8D72F14D058745CA26; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -62,6 +64,7 @@
 		36CBA806AB64D570D537E85F /* Sources/WorldMap.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/WorldMap.swift; sourceTree = "<group>"; };
 		B158B91888D30F3F6464613A /* Sources/CameraSnapshots.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/CameraSnapshots.swift; sourceTree = "<group>"; };
 		E0AF200828D9A42BDE31090C /* Sources/WorldComponents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/WorldComponents.swift; sourceTree = "<group>"; };
+		7BE19D8D72F14D058745CA26 /* Sources/CameraSources.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/CameraSources.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -97,6 +100,7 @@
 				9C8E3C2ED9F709BCE0D86589 /* Sources/WorldMapData.swift */,
 				36CBA806AB64D570D537E85F /* Sources/WorldMap.swift */,
 				B158B91888D30F3F6464613A /* Sources/CameraSnapshots.swift */,
+				7BE19D8D72F14D058745CA26 /* Sources/CameraSources.swift */,
 				E0AF200828D9A42BDE31090C /* Sources/WorldComponents.swift */,
 				0919673DCA7150AD018ADE99 /* Sources/Feed.swift */,
 				29E513848D0A091475AA8881 /* Sources/TitleTranslation.swift */,
@@ -213,6 +217,7 @@
 				5FBD7114D68860CF5594956F /* Sources/WorldMapData.swift in Sources */,
 				632EEC28D5D46D7BD63BA3F0 /* Sources/WorldMap.swift in Sources */,
 				5450D7FCB3447E62A3F7E361 /* Sources/CameraSnapshots.swift in Sources */,
+				9BE19D8D72F14D058745CA26 /* Sources/CameraSources.swift in Sources */,
 				43B8D4896DB1430475BB0CCA /* Sources/WorldComponents.swift in Sources */,
 				75F55193F40ACB5988FAECEC /* Sources/Feed.swift in Sources */,
 				9F96913EF4AF09C832EC4AB2 /* Sources/TitleTranslation.swift in Sources */,
@@ -227,6 +232,7 @@
 				FA7E0520D0C64C09C92D1268 /* Sources/WorldMapData.swift in Sources */,
 				1EC6C214E1EF52EBD7EB0908 /* Sources/WorldMap.swift in Sources */,
 				EA639130368EB985DD973635 /* Sources/CameraSnapshots.swift in Sources */,
+				8BE19D8D72F14D058745CA26 /* Sources/CameraSources.swift in Sources */,
 				C4E678358C8FEB33899FCB86 /* Sources/WorldComponents.swift in Sources */,
 				61384AF44E0744B119575A58 /* Sources/Feed.swift in Sources */,
 				2B6F95DC2E644C68FAD9BDF1 /* Sources/TitleTranslation.swift in Sources */,

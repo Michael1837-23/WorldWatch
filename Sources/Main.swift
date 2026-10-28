@@ -21,6 +21,10 @@ struct CachedFeed: Codable {
     @Published var cameraInterval = CameraCity.interval
     @Published var cameraManifests: [String: CameraManifest] = [:]
     @Published var cameraRefreshing = false
+    @Published var cameraSources: [String: [CameraSource]] = [:]
+    @Published var cameraHealth: [String: CameraHealth] = [:]
+    @Published var disabledCameras = CameraOptions.disabled
+    @Published var skylineCameras = CameraOptions.skyline
     @Published var lastCheck: Date?
     @Published var translationConfiguration: TranslationSession.Configuration?
     @Published var translationStatus = "正在检查中英翻译语言…"
@@ -127,8 +131,14 @@ struct CachedFeed: Codable {
     }
     var selectedCities: [CameraCity] { cameraCities.compactMap { id in CameraCity.all.first { $0.id == id } } }
     func readCameras() {
+        let snapshots = CameraSnapshotStore.shared
+        cameraSources = Dictionary(uniqueKeysWithValues: CameraCity.all.map { ($0.id, snapshots.pool($0)) })
+        cameraHealth = snapshots.health()
         cameraManifests = Dictionary(uniqueKeysWithValues: CameraCity.all.compactMap { city in
-            CameraSnapshotStore.shared.read(city.id).map { (city.id, $0) }
+            CameraSnapshotStore.shared.read(city.id).map { manifest in
+                var visible = manifest; visible.frames = manifest.frames.filter(CameraOptions.allows)
+                return (city.id, visible)
+            }
         })
     }
     func startCameras() {
@@ -146,9 +156,20 @@ struct CachedFeed: Codable {
         guard !cameraRefreshing else { return }
         cameraRefreshing = true
         defer { cameraRefreshing = false }
-        let changed = await CameraService.shared.refresh(cities: selectedCities, force: force)
+        let changed = await CameraService.shared.refresh(cities: selectedCities, force: force, resetCooldown: force)
         readCameras()
         if changed { requestWidgetReload() }
+    }
+    func setCameraSource(_ source: CameraSource, enabled: Bool) {
+        if enabled { disabledCameras.remove(source.id) } else { disabledCameras.insert(source.id) }
+        CameraOptions.disabled = disabledCameras
+        readCameras(); requestWidgetReload(force: true)
+        Task { await refreshCameras() }
+    }
+    func setSkylineCameras(_ enabled: Bool) {
+        skylineCameras = enabled; CameraOptions.skyline = enabled
+        readCameras(); requestWidgetReload(force: true)
+        Task { await refreshCameras() }
     }
     func setCameraInterval(_ value: Double) {
         cameraInterval = value; CameraCity.interval = value; startCameras()
@@ -460,29 +481,30 @@ struct SettingsView: View {
                     Picker("抓取间隔", selection: Binding(get: { store.cameraInterval }, set: { store.setCameraInterval($0) })) {
                         ForEach([5, 10, 15, 30], id: \.self) { Text("\($0) 分钟").tag(Double($0 * 60)) }
                     }
+                    Toggle("SkylineWebcams 预览图", isOn: Binding(get: { store.skylineCameras }, set: { store.setSkylineCameras($0) }))
                     ForEach(store.selectedCities + CameraCity.all.filter { !store.cameraCities.contains($0.id) }) { city in
-                        HStack {
-                            Toggle(isOn: Binding(get: { store.cameraCities.contains(city.id) }, set: { _ in store.toggleCity(city) })) {
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(city.name)
-                                    if let manifest = store.cameraManifests[city.id] {
-                                        if let error = manifest.error { Text(error).foregroundStyle(.orange).font(.system(size: 11)) }
-                                        else if let date = manifest.fetchedAt { Text("\(shortTimeLabel(date)) 成功获取").foregroundStyle(.secondary).font(.system(size: 11)) }
-                                    } else { Text("等待获取实景截图").foregroundStyle(.secondary).font(.system(size: 11)) }
+                        VStack(alignment: .leading, spacing: 8) {
+                            cameraCityRow(city)
+                            DisclosureGroup {
+                                if let sources = store.cameraSources[city.id], !sources.isEmpty {
+                                    ForEach(sources) { source in cameraSourceRow(source) }
+                                } else {
+                                    Text("暂无固定来源，选择城市后自动搜索镜头。")
+                                        .font(.caption).foregroundStyle(.secondary)
                                 }
+                            } label: {
+                                Text("来源（\(store.cameraSources[city.id]?.count ?? 0)）")
+                                    .font(.caption).foregroundStyle(.secondary)
                             }
-                            .accessibilityLabel(city.name)
-                            .disabled(!store.cameraCities.contains(city.id) && store.cameraCities.count >= 4)
-                            if let index = store.cameraCities.firstIndex(of: city.id) {
-                                Button { store.moveCity(city.id, direction: -1) } label: { Image(systemName: "chevron.up") }
-                                    .disabled(index == 0).accessibilityLabel("上移\(city.name)")
-                                Button { store.moveCity(city.id, direction: 1) } label: { Image(systemName: "chevron.down") }
-                                    .disabled(index == store.cameraCities.count - 1).accessibilityLabel("下移\(city.name)")
-                            }
+                            .accessibilityLabel("\(city.name)来源")
                         }
                     }
+                    Button(store.cameraRefreshing ? "正在重新检测…" : "立即重新检测") {
+                        Task { await store.refreshCameras(force: true) }
+                    }
+                    .disabled(store.cameraRefreshing || store.cameraCities.isEmpty)
                 } header: { Text("城市实景") } footer: {
-                    Text("已选 \(store.cameraCities.count)/4 座城市，最多选择 4 座，可上下调整显示顺序。画面为定时截图轮播；来源失效时自动尝试其他候选，全部失败则保留旧图。").foregroundStyle(.secondary)
+                    Text("已选 \(store.cameraCities.count)/4 座城市，最多选择 4 座，可上下调整显示顺序。画面为定时截图轮播；来源失效时自动尝试其他候选，全部失败则保留旧图。首次画面待验证，后续比较确认是否变化。SkylineWebcams 仅供个人查看，点击打开 SkylineWebcams 原页面。").foregroundStyle(.secondary)
                 }
                 Section {
                     ForEach(NewsSource.all) { source in
@@ -500,6 +522,45 @@ struct SettingsView: View {
             .formStyle(.grouped)
         }
         .frame(width: 440).frame(minHeight: 420, idealHeight: 620)
+    }
+    private func cameraCityRow(_ city: CameraCity) -> some View {
+        HStack {
+            Toggle(isOn: Binding(get: { store.cameraCities.contains(city.id) }, set: { _ in store.toggleCity(city) })) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(city.name)
+                    if let manifest = store.cameraManifests[city.id] {
+                        if let error = manifest.error { Text(error).foregroundStyle(.orange).font(.caption) }
+                        else if let date = manifest.fetchedAt { Text("\(shortTimeLabel(date)) 成功获取").foregroundStyle(.secondary).font(.caption) }
+                    } else { Text("等待获取实景截图").foregroundStyle(.secondary).font(.caption) }
+                }
+            }
+            .accessibilityLabel(city.name)
+            .disabled(!store.cameraCities.contains(city.id) && store.cameraCities.count >= 4)
+            if let index = store.cameraCities.firstIndex(of: city.id) {
+                Button { store.moveCity(city.id, direction: -1) } label: { Image(systemName: "chevron.up") }
+                    .disabled(index == 0).accessibilityLabel("上移\(city.name)")
+                Button { store.moveCity(city.id, direction: 1) } label: { Image(systemName: "chevron.down") }
+                    .disabled(index == store.cameraCities.count - 1).accessibilityLabel("下移\(city.name)")
+            }
+        }
+    }
+    private func cameraSourceRow(_ source: CameraSource) -> some View {
+        let record = store.cameraHealth[source.id] ?? CameraHealth()
+        return Toggle(isOn: Binding(get: { !store.disabledCameras.contains(source.id) }, set: { store.setCameraSource(source, enabled: $0) })) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text("\(source.platform.title) · \(source.title)").fixedSize(horizontal: false, vertical: true)
+                HStack(spacing: 5) {
+                    Text(record.state.title)
+                    if let changed = record.lastChanged {
+                        Text("最近变化 \(shortTimeLabel(changed))")
+                    } else { Text("尚未检测到变化") }
+                }
+                .font(.caption).foregroundStyle(.secondary)
+            }
+            .help(record.reason ?? source.page.absoluteString)
+        }
+        .disabled(source.platform == .skyline && !store.skylineCameras)
+        .accessibilityLabel("\(source.platform.title)，\(source.title)，\(record.state.title)，\(record.lastChanged.map { "最近变化 " + shortTimeLabel($0) } ?? "尚未检测到变化")")
     }
     @ViewBuilder func sourceDetail(_ source: NewsSource) -> some View {
         if let error = store.errors[source.id], !store.disabled.contains(source.id) {

@@ -6,8 +6,8 @@
 <key>CFBundleName</key><string>世界动态</string>
 <key>CFBundleDisplayName</key><string>世界动态</string>
 <key>CFBundlePackageType</key><string>APPL</string>
-<key>CFBundleShortVersionString</key><string>2.5</string>
-<key>CFBundleVersion</key><string>11</string>
+<key>CFBundleShortVersionString</key><string>2.6</string>
+<key>CFBundleVersion</key><string>12</string>
 <key>LSMinimumSystemVersion</key><string>26.0</string>
 <key>NSHighResolutionCapable</key><true/>
 <key>WorldWatchAppGroup</key><string>$(DEVELOPMENT_TEAM).local.michael.worldwatch</string>

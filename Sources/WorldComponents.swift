@@ -127,7 +127,7 @@ struct CameraTile: View {
                     Image(systemName: "photo").font(.title2).foregroundStyle(.tertiary)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
-                Text(city.name).font(.system(size: 10, weight: .medium)).foregroundStyle(.white)
+                Text(city.englishName).font(.system(size: 10, weight: .medium)).foregroundStyle(.white)
                     .padding(.horizontal, 6).padding(.vertical, 3)
                     .background(.black.opacity(0.55), in: Capsule()).padding(6)
             }
