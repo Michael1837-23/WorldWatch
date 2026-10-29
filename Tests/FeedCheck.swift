@@ -392,7 +392,16 @@ import UniformTypeIdentifiers
         assert(intervalStore.health()[intervalSource.id]?.failures == 0)
 
         assert(CameraCity.all.map(\.englishName) == ["Beijing", "Shanghai", "Hong Kong", "Chongqing", "Tokyo", "Taipei", "New York", "Los Angeles", "Paris", "London"])
-        print("PASS: dHash 与微小像素变化、封面状态机、四分钟比较间隔、失败退避、过期/纯色/小图、平台分散、当轮失败及封面顺延、来源持久化、Skyline/频道解析与旧 manifest")
+        var uploadedCover = CameraHealth()
+        uploadedCover.observe(fingerprint, modified: nil, etag: "\"\(Int(now.timeIntervalSince1970) - 86400 * 15)\"", now: now)
+        assert(uploadedCover.state == .staticCover && uploadedCover.cooldownUntil != nil, "YouTube 封面 ETag 为旧上传时间戳时立即判为封面")
+        var refreshing = CameraHealth()
+        refreshing.observe(fingerprint, modified: nil, etag: "\"232310\"", now: now)
+        assert(refreshing.state == .unverified, "小计数 ETag 是自动刷新的直播帧")
+        var cached = CameraHealth(), stamp = now.addingTimeInterval(-600)
+        for minutes in [0.0, 5, 10, 15] { cached.observe(fingerprint, modified: stamp, now: now.addingTimeInterval(minutes * 60)) }
+        assert(cached.state == .unverified && cached.unchangedCount == 0, "Last-Modified 未变说明 CDN 缓存未更新，不计为静止")
+        print("PASS: dHash 与微小像素变化、封面状态机、封面 ETag 与 CDN 缓存不误判、四分钟比较间隔、失败退避、过期/纯色/小图、平台分散、当轮失败及封面顺延、来源持久化、Skyline/频道解析与旧 manifest")
 
         try FileManager.default.removeItem(at: temporary)
         print("PASS: 地震/GDACS坐标、旧缓存兼容、RSS 1.0/Atom、多国地图、投影四角、确定且无重叠的标签、昼夜与新闻热点边界")

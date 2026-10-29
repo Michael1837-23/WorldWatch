@@ -305,7 +305,8 @@ actor CameraService {
                 var record = source.platform == .youtube && resolved.page != source.page ? CameraHealth() : health[source.id] ?? CameraHealth()
                 guard response.mimeType?.hasPrefix("image/") == true, let fingerprint = CameraFingerprint.make(data),
                       let jpeg = cameraJPEG(data) else { throw FeedError.invalid }
-                record.observe(fingerprint, modified: cameraHTTPDate(response.value(forHTTPHeaderField: "Last-Modified")), now: Date())
+                record.observe(fingerprint, modified: cameraHTTPDate(response.value(forHTTPHeaderField: "Last-Modified")),
+                               etag: response.value(forHTTPHeaderField: "ETag"), now: Date())
                 health[source.id] = record
                 if diagnostic { print("  \(city.name) · \(resolved.platform.title) · \(source.id) · \(record.state.title) · \(data.count) bytes · Last-Modified: \(response.value(forHTTPHeaderField: "Last-Modified") ?? "无")") }
                 guard [.live, .unverified].contains(record.state) else { lastError = record.reason ?? record.state.title; continue }

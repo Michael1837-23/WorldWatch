@@ -126,7 +126,8 @@ struct CameraHealth: Codable, Sendable {
         lastFetched = now; failures = 0; state = .offline; self.reason = reason
         cooldownUntil = now.addingTimeInterval(CameraThresholds.offlineCooldown)
     }
-    mutating func observe(_ image: CameraFingerprint, modified: Date?, now: Date) {
+    mutating func observe(_ image: CameraFingerprint, modified: Date?, etag: String? = nil, now: Date) {
+        let previousModified = lastModified
         lastFetched = now; bytes = image.bytes; lastModified = modified; failures = 0
         if image.longestSide < CameraThresholds.minimumDimension || image.bytes < CameraThresholds.minimumBytes {
             offline(now: now, reason: "图片过小，可能为离线占位"); return
@@ -137,12 +138,19 @@ struct CameraHealth: Codable, Sendable {
         if let modified, now.timeIntervalSince(modified) > CameraThresholds.maximumImageAge {
             offline(now: now, reason: "上游图片超过两小时未更新"); return
         }
+        // i.ytimg.com tags uploaded custom thumbnails with their Unix upload time; auto-refreshed live frames carry small counters.
+        if let uploaded = cameraUploadDate(etag: etag), now.timeIntervalSince(uploaded) > CameraThresholds.maximumImageAge {
+            state = .staticCover; reason = "缩略图为直播封面，不是实时画面"; unchangedCount = CameraThresholds.unchangedLimit
+            cooldownUntil = now.addingTimeInterval(CameraThresholds.staticCooldown); return
+        }
         cooldownUntil = nil; reason = nil
         guard let previous = fingerprint, let compared = lastComparedAt else {
             fingerprint = image.hash; sha256 = image.sha256; samples = image.samples; lastComparedAt = now
             state = .unverified; return
         }
         guard now.timeIntervalSince(compared) >= CameraThresholds.comparisonInterval else { return }
+        // Same Last-Modified means the CDN served its cached copy (Skyline caches 18 minutes), not that the scene froze.
+        if let modified, modified == previousModified { return }
         let distance = (previous ^ image.hash).nonzeroBitCount
         // A changed byte digest alone can be JPEG metadata. Require actual pixel noise when dHash barely moves.
         let pixelChange: Bool = samples.map { old in
@@ -180,6 +188,12 @@ func rankedCameraSources(_ sources: [CameraSource], health: [String: CameraHealt
     guard let platform = selected.first?.platform, selected.filter({ $0.platform == platform }).count >= 2,
           available.contains(where: { $0.platform != platform }) else { return available }
     return available.filter { $0.platform != platform } + available.filter { $0.platform == platform }
+}
+
+func cameraUploadDate(etag: String?) -> Date? {
+    guard let digits = etag?.trimmingCharacters(in: CharacterSet(charactersIn: "W/\" ")), digits.count == 10,
+          let seconds = TimeInterval(digits), seconds > 1_000_000_000 else { return nil }
+    return Date(timeIntervalSince1970: seconds)
 }
 
 func cameraHTTPDate(_ value: String?) -> Date? {
