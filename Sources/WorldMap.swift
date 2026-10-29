@@ -217,16 +217,20 @@ let conflictThresholds = [3, 8, 16, 30]
 func conflictLevel(_ score: Int) -> Int { conflictThresholds.filter { score >= $0 }.count }
 
 private let conflictPatterns = [
-    #"(?i)\b(airstrikes?|missiles?|shelling|bombing|invasion|massacre|killed|dead|casualties)\b|空袭|空襲|导弹|導彈|炮击|炮擊|轰炸|轟炸|入侵|死亡|遇难|遇難|伤亡|傷亡"#,
+    #"(?i)\b(airstrikes?|missiles?|shelling|bombing|invasion|massacre)\b|空袭|空襲|导弹|導彈|炮击|炮擊|轰炸|轟炸|入侵"#,
     #"(?i)\b(war|fighting|clashes|offensive|drone strikes?|hostages?|troops)\b|战争|戰爭|交火|冲突|衝突|进攻|進攻|无人机袭击|無人機襲擊|人质|人質|军队|軍隊"#,
     #"(?i)\b(military|ceasefire|sanctions|tensions|truce)\b|军事|軍事|停火|制裁|紧张局势|緊張局勢"#
 ].map { try! NSRegularExpression(pattern: $0) }
+// Casualty words alone also describe accidents (a train crash "kills 64"); they only raise a headline
+// to the top weight when it also has a conflict word or an attack context.
+private let casualtyPattern = try! NSRegularExpression(pattern: #"(?i)\b(killed|dead|casualties|death toll)\b|死亡|遇难|遇難|伤亡|傷亡"#)
+private let attackPattern = try! NSRegularExpression(pattern: #"(?i)\b(attacks?|attacked|soldiers|militants|gunmen|army)\b|袭击|襲擊|士兵|武装|武裝"#)
 
 func conflictWeight(_ title: String) -> Int {
-    for (index, regex) in conflictPatterns.enumerated() {
-        if regex.firstMatch(in: title, range: NSRange(title.startIndex..., in: title)) != nil { return 3 - index }
-    }
-    return 0
+    func has(_ regex: NSRegularExpression) -> Bool { regex.firstMatch(in: title, range: NSRange(title.startIndex..., in: title)) != nil }
+    let tier = conflictPatterns.firstIndex(where: has).map { 3 - $0 } ?? 0
+    if has(casualtyPattern), tier > 0 || has(attackPattern) { return 3 }
+    return tier
 }
 
 private let countryAliases: [String: [String]] = [

@@ -493,11 +493,10 @@ struct SettingsView: View {
                         ForEach(MapRegion.allCases, id: \.self) { Text($0.rawValue).tag($0) }
                     }
                     ForEach([("mapEarthquakes", "地震", "USGS，24 小时内 M6.0 及以上"),
-                             ("mapCyclones", "台风路径", "GDACS，仅显示仍活跃的气旋"),
+                             ("mapCyclones", "台风", "GDACS，仅显示仍活跃的气旋；虚线为约未来 12 小时路径"),
                              ("mapDisasters", "洪水与火山", "GDACS，进行中或 3 天内的红／橙预警"),
                              ("mapConflicts", "冲突板块", "按 48 小时新闻中冲突类报道的数量与严重程度估计，颜色越深越严重；非核实的冲突数据"),
                              ("mapNight", "昼夜分界", "按条目时间在本地计算"),
-                             ("mapCityWeather", "城市时间与天气", "Open-Meteo，仅世界总览显示"),
                              ("mapISS", "国际空间站", "wheretheiss.at，按条目时间估算位置")], id: \.0) { key, label, detail in
                         Toggle(isOn: Binding(get: { WorldPreferences.enabled(key) }, set: { store.setMapLayer(key, enabled: $0) })) {
                             VStack(alignment: .leading, spacing: 2) {

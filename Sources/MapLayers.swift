@@ -19,6 +19,30 @@ struct MapCyclone: Codable, Sendable {
     var current: MapCoordinate? { history.last ?? forecast.first }
 }
 
+/// GDACS forecast lines carry no timestamps. History segments are roughly six-hourly advisories,
+/// so twice the mean history step approximates twelve hours of travel along the forecast line.
+func cycloneForecast(_ cyclone: MapCyclone, hours: Double = 12) -> [MapCoordinate] {
+    func distance(_ a: MapCoordinate, _ b: MapCoordinate) -> Double {
+        let dx = (b.longitude - a.longitude) * cos((a.latitude + b.latitude) / 2 * .pi / 180)
+        return (dx * dx + pow(b.latitude - a.latitude, 2)).squareRoot()
+    }
+    let steps = zip(cyclone.history, cyclone.history.dropFirst()).map(distance)
+    var budget = (steps.isEmpty ? 1.0 : steps.reduce(0, +) / Double(steps.count)) * hours / 6
+    guard var previous = cyclone.forecast.first else { return [] }
+    var result = [previous]
+    for point in cyclone.forecast.dropFirst() {
+        let length = distance(previous, point)
+        if length >= budget {
+            let t = length > 0 ? budget / length : 0
+            result.append(.init(longitude: previous.longitude + (point.longitude - previous.longitude) * t,
+                                latitude: previous.latitude + (point.latitude - previous.latitude) * t))
+            return result
+        }
+        budget -= length; result.append(point); previous = point
+    }
+    return result
+}
+
 func cycloneName(_ name: String) -> String {
     name.replacingOccurrences(of: "(?i)^Tropical Cyclone\\s+", with: "", options: .regularExpression)
         .replacingOccurrences(of: "-\\d{2,4}$", with: "", options: .regularExpression)
@@ -278,6 +302,7 @@ actor MapLayerService {
 
 private struct MapSettingsForFetch {
     let cyclones = WorldPreferences.enabled("mapCyclones")
-    let weather = WorldPreferences.enabled("mapCityWeather")
+    // City time and weather labels were removed from the map at the user's request; the map shows text-free markers.
+    let weather = false
     let iss = WorldPreferences.enabled("mapISS")
 }

@@ -482,6 +482,8 @@ import UniformTypeIdentifiers
         assert(mapConflicts([disasterHeadline], now: now).isEmpty)
         assert(conflictWeight("Iran airstrike despite ceasefire") == 3)
         assert(conflictWeight("Iran 军事进攻与伤亡") == 3 && conflictWeight("warship awards") == 0)
+        assert(conflictWeight("At least 64 killed in high-speed train collision in central Spain") == 0, "事故伤亡不算冲突")
+        assert(conflictWeight("Gunmen attack village, 12 killed") == 3 && conflictWeight("Troops advance, dozens dead") == 3)
         assert((0...32).map(conflictLevel) == (0...32).map { score in score >= 30 ? 4 : score >= 16 ? 3 : score >= 8 ? 2 : score >= 3 ? 1 : 0 })
         assert(mapConflicts([headline("domestic", "中国导弹空袭", "cns-china", 1)], now: now).isEmpty)
         assert(mapConflicts([headline("48h", "Iran missiles", "bbc", 48 * 3600 + 1)], now: now).isEmpty)
@@ -524,6 +526,12 @@ import UniformTypeIdentifiers
         try layerStore.write(.init(checkedAt: now, fetchedAt: now.addingTimeInterval(-86401), value: [track]), name: "cyclones")
         assert(layerStore.cyclones(at: now).isEmpty)
         try FileManager.default.removeItem(at: temporary)
+        let forecastSample = MapCyclone(id: 1, name: "TEST", red: true, end: now,
+            history: [.init(longitude: 84, latitude: 16), .init(longitude: 83, latitude: 16), .init(longitude: 82, latitude: 16)],
+            forecast: [.init(longitude: 82, latitude: 16), .init(longitude: 82, latitude: 17), .init(longitude: 82, latitude: 20)])
+        let twelve = cycloneForecast(forecastSample)
+        assert(twelve.count == 3 && abs(twelve[2].latitude - 17.9) < 0.15, "未来 12 小时约为两倍历史 6 小时步长")
+        assert(cycloneForecast(MapCyclone(id: 2, name: "X", red: false, end: now, history: [], forecast: [])).isEmpty)
         print("PASS: 2.7 地震时限与震级标签、GDACS类型和结束时间、台风过滤/名称/乱序历史预测/60点上限、冲突评分/48小时/四级/15国/词边界、夏令时、天气数组及过期、ISS插值及经线断线、偏好迁移与过期缓存")
         if let index = CommandLine.arguments.firstIndex(of: "--fixtures"), CommandLine.arguments.count > index + 1 {
             let directory = CommandLine.arguments[index + 1]
