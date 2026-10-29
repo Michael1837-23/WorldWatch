@@ -119,6 +119,11 @@ struct CachedFeed: Codable {
         publishWidgetSnapshot(forceReload: true)
         Task { await refresh() }
     }
+    func setDomesticShare(_ share: DomesticShare) {
+        DomesticShare.selected = share
+        objectWillChange.send()
+        publishWidgetSnapshot(forceReload: true)
+    }
     func setWidgetDisplayMode(_ mode: NewsDisplayMode) {
         widgetDisplayMode = mode
         NewsDisplayMode.selected = mode
@@ -311,6 +316,7 @@ struct WorldView: View {
             let ids = Set(page.map(\.id))
             return page + pool.filter { !ids.contains($0.id) }
         }
+        if store.filter == "最新" { return balancedByOrigin(store.events, ratio: DomesticShare.selected.ratio) }
         return store.events.filter { event in
             switch store.filter {
             case "国内": return event.isDomestic
@@ -452,8 +458,12 @@ struct SettingsView: View {
                         ForEach(NewsDisplayMode.allCases, id: \.self) { Text($0.title).tag($0) }
                     }
                     .pickerStyle(.segmented)
+                    Picker("国内新闻占比", selection: Binding(get: { DomesticShare.selected }, set: { store.setDomesticShare($0) })) {
+                        ForEach(DomesticShare.allCases, id: \.self) { Text($0.rawValue).tag($0) }
+                    }
                 } header: { Text("小组件") } footer: {
-                    Text(store.widgetDisplayMode == .latest ? "按报道时间排列，新报道出现在最上方。" : "混合不同领域的近期报道并定时轮换，轮换不代表新发布。")
+                    Text((store.widgetDisplayMode == .latest ? "按报道时间排列，新报道出现在最上方。" : "混合不同领域的近期报道并定时轮换，轮换不代表新发布。")
+                         + "北京时间白天国内发稿集中，「均衡」时国内新闻约占三分之一、「少」约占五分之一，超出的顺延到后面，不会丢弃；同时作用于应用里的「最新」列表。")
                         .foregroundStyle(.secondary)
                 }
                 Section("更新") {

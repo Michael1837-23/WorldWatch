@@ -10,11 +10,17 @@ struct MapSettings: Sendable {
     var hotspots = WorldPreferences.enabled("mapHotspots")
 }
 
+/// Tile order colors, shared by the map pins and the city labels so each picture can be found on the map.
+/// Red and orange stay reserved for earthquakes and disaster alerts.
+let cameraAccents: [Color] = [Color(red: 0.25, green: 0.62, blue: 1.0), Color(red: 0.2, green: 0.82, blue: 0.55),
+                              Color(red: 0.69, green: 0.45, blue: 1.0), Color(red: 1.0, green: 0.42, blue: 0.7)]
+
 struct WorldMapCanvas: View {
     let markers: [MapMarker]
     let hotspots: [MapHotspot]
     let sun: MapCoordinate
     var settings = MapSettings()
+    var cameras: [CameraCity] = []
     var body: some View {
         Canvas { context, size in
             guard size.width > 0, size.height > 0 else { return }
@@ -67,8 +73,9 @@ struct WorldMapCanvas: View {
             if settings.hotspots {
                 for hotspot in hotspots {
                     let center = projection.visible(hotspot.coordinate)
-                    let radius = min(22, 4 + sqrt(Double(hotspot.count)) * 2.5)
-                    context.fill(Path(ellipseIn: CGRect(x: center.x - radius, y: center.y - radius, width: radius * 2, height: radius * 2)), with: .color(.orange.opacity(0.28)))
+                    // Mention counts are a rough 24-hour signal, so they stay a faint wash under the live layers.
+                    let radius = min(14, 3 + sqrt(Double(hotspot.count)) * 1.6)
+                    context.fill(Path(ellipseIn: CGRect(x: center.x - radius, y: center.y - radius, width: radius * 2, height: radius * 2)), with: .color(.orange.opacity(0.16)))
                 }
             }
             for marker in markers {
@@ -84,6 +91,13 @@ struct WorldMapCanvas: View {
             for label in mapLabels(projection: projection) {
                 context.draw(Text(label.text).font(.system(size: 9, weight: .semibold)).foregroundStyle(.secondary),
                              at: CGPoint(x: label.rect.midX, y: label.rect.midY))
+            }
+            for (index, city) in cameras.prefix(cameraAccents.count).enumerated() {
+                let center = projection.visible(city.coordinate), color = cameraAccents[index]
+                context.fill(Path(ellipseIn: CGRect(x: center.x - 8, y: center.y - 8, width: 16, height: 16)), with: .color(color.opacity(0.25)))
+                let dot = Path(ellipseIn: CGRect(x: center.x - 4, y: center.y - 4, width: 8, height: 8))
+                context.fill(dot, with: .color(color))
+                context.stroke(dot, with: .color(.white.opacity(0.9)), lineWidth: 1.2)
             }
         }
         .clipped()
@@ -104,6 +118,7 @@ func cameraImage(_ url: URL, maxPixel: Int) -> NSImage? {
 struct CameraTile: View {
     let city: CameraCity
     let frame: CameraFrame?
+    var accent: Color? = nil
     var maxPixel = 640
     var store = CameraSnapshotStore.shared
     var body: some View {
@@ -127,7 +142,10 @@ struct CameraTile: View {
                     Image(systemName: "photo").font(.title2).foregroundStyle(.tertiary)
                         .frame(maxWidth: .infinity, maxHeight: .infinity)
                 }
-                Text(city.englishName).font(.system(size: 10, weight: .medium)).foregroundStyle(.white)
+                HStack(spacing: 4) {
+                    if let accent { Circle().fill(accent).frame(width: 6, height: 6) }
+                    Text(city.englishName).font(.system(size: 10, weight: .medium)).foregroundStyle(.white)
+                }
                     .padding(.horizontal, 6).padding(.vertical, 3)
                     .background(.black.opacity(0.55), in: Capsule()).padding(6)
             }
@@ -153,7 +171,8 @@ struct CameraGrid: View {
                         if cities.indices.contains(position) {
                             let city = cities[position]
                             let images = frames[city.id] ?? []
-                            CameraTile(city: city, frame: images.isEmpty ? nil : images[cameraRotationIndex(entry: index, city: position, count: images.count)], maxPixel: maxPixel, store: store)
+                            CameraTile(city: city, frame: images.isEmpty ? nil : images[cameraRotationIndex(entry: index, city: position, count: images.count)],
+                                       accent: cameraAccents[position % cameraAccents.count], maxPixel: maxPixel, store: store)
                         } else { Color.clear }
                     }
                 }

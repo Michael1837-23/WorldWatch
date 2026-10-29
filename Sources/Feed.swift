@@ -170,8 +170,36 @@ func uniqueNewsEvents(_ events: [WorldEvent], perCategory: Int? = nil, mergeTopi
     }
 }
 
-func latestEvents(_ events: [WorldEvent], limit: Int = 64, now: Date = Date()) -> [WorldEvent] {
-    Array(uniqueNewsEvents(events, mergeTopics: false, now: now).prefix(limit))
+/// Chinanews' four domestic feeds publish dozens of items each during Beijing daytime while Europe and
+/// America sleep, so a pure time order fills the latest list with domestic news. This caps their share.
+enum DomesticShare: String, CaseIterable, Sendable {
+    case less = "少", balanced = "均衡", unlimited = "不限"
+    var ratio: Double? { self == .less ? 0.2 : self == .balanced ? 1.0 / 3 : nil }
+    private static var preferences: UserDefaults {
+        let group = Bundle.main.object(forInfoDictionaryKey: "WorldWatchAppGroup") as? String
+        return group.flatMap { UserDefaults(suiteName: $0) } ?? .standard
+    }
+    static var selected: DomesticShare {
+        get { DomesticShare(rawValue: preferences.string(forKey: "domesticShare") ?? "") ?? .balanced }
+        set { preferences.set(newValue.rawValue, forKey: "domesticShare") }
+    }
+}
+
+/// Keeps time order but defers domestic items once they exceed the ratio; deferred items follow later, none are dropped.
+func balancedByOrigin(_ events: [WorldEvent], ratio: Double?) -> [WorldEvent] {
+    guard let ratio else { return events }
+    var result: [WorldEvent] = [], deferred: [WorldEvent] = [], domestic = 0
+    for event in events {
+        if event.isDomestic { deferred.append(event) } else { result.append(event) }
+        while let next = deferred.first, Double(domestic + 1) <= (ratio * Double(result.count + 1)).rounded(.up) {
+            result.append(next); deferred.removeFirst(); domestic += 1
+        }
+    }
+    return result + deferred
+}
+
+func latestEvents(_ events: [WorldEvent], limit: Int = 64, now: Date = Date(), domesticRatio: Double? = DomesticShare.selected.ratio) -> [WorldEvent] {
+    Array(balancedByOrigin(uniqueNewsEvents(events, mergeTopics: false, now: now), ratio: domesticRatio).prefix(limit))
 }
 
 func displayPool(_ events: [WorldEvent], mode: NewsDisplayMode, now: Date = Date()) -> [WorldEvent] {

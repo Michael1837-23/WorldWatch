@@ -175,7 +175,12 @@ import UniformTypeIdentifiers
         let recoveredMode = try JSONDecoder().decode(NewsSnapshot.self, from: JSONEncoder().encode(switched))
         assert(recoveredMode.mode == .rotation && initial.mode == .latest, "模式可序列化，旧缓存默认最新优先")
         assert(widgetTimeline(afterLatest, now: now, pageSize: 1)[0].events.count == 1)
-        print("PASS: 最新置顶、旧条目顺次下移、无新增不轮换、模式切换与兼容、小尺寸最新显示")
+        let domesticFlood = (0..<6).map { headline("cn\($0)", "国内新闻\($0)", "cns-china", Double($0)) } + [headline("world-a", "Global summit opens", "bbc", 10), headline("world-b", "Markets steady", "cnbc", 20)]
+        let capped = balancedByOrigin(mergedEvents(domesticFlood, now: now), ratio: 1.0 / 3)
+        assert(capped.count == domesticFlood.count && capped.prefix(3).filter(\.isDomestic).count == 1, "国内占比上限只顺延，不丢弃")
+        assert(capped.prefix(3).map(\.id) == ["cn0", "world-a", "world-b"])
+        assert(balancedByOrigin(mergedEvents(domesticFlood, now: now), ratio: nil).prefix(3).allSatisfy(\.isDomestic), "不限时保持纯时间顺序")
+        print("PASS: 国内新闻占比上限、最新置顶、旧条目顺次下移、无新增不轮换、模式切换与兼容、小尺寸最新显示")
         let temporary = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         let snapshotStore = NewsSnapshotStore(fileURL: temporary.appendingPathComponent("snapshot.json"))
         try snapshotStore.write(offline)
@@ -313,7 +318,12 @@ import UniformTypeIdentifiers
         }
         let yt1 = testSource("yt1", .youtube), yt2 = testSource("yt2", .youtube), yt3 = testSource("yt3", .youtube), sky = testSource("sky", .skyline)
         var rankingHealth = [yt1.id: health, yt2.id: health, yt3.id: health]
-        assert(rankedCameraSources([sky, yt1], health: rankingHealth, now: now.addingTimeInterval(1000)).first?.id == yt1.id)
+        assert(rankedCameraSources([yt1, sky], health: rankingHealth, now: now.addingTimeInterval(1000)).first?.id == sky.id, "从未检测的新来源优先被检测")
+        var rotation = rankingHealth
+        rotation[yt1.id]?.lastFetched = now.addingTimeInterval(-60); rotation[yt2.id]?.lastFetched = now.addingTimeInterval(-1800); rotation[yt3.id]?.lastFetched = now.addingTimeInterval(-600)
+        assert(rankedCameraSources([yt1, yt2, yt3], health: rotation, now: now).map(\.id) == [yt2.id, yt3.id, yt1.id], "可用镜头按最久未抓取轮换")
+        var covered = rotation; covered[yt2.id]?.state = .staticCover
+        assert(rankedCameraSources([yt1, yt2, yt3], health: covered, now: now).last?.id == yt2.id, "封面冷却结束后排在可用镜头之后")
         rankingHealth[yt1.id]?.cooldownUntil = now.addingTimeInterval(2000)
         assert(rankedCameraSources([yt1, sky], health: rankingHealth, now: now.addingTimeInterval(1000)).map(\.id) == [sky.id])
         assert(rankedCameraSources([yt3, sky], health: rankingHealth, now: now.addingTimeInterval(1000), selected: [yt1, yt2]).first?.id == sky.id)
@@ -340,9 +350,11 @@ import UniformTypeIdentifiers
         let failed = testSource("a-failure"), cover = testSource("b-cover"), good = testSource("c-good")
         try fallbackStore.writeState([fallbackCity.id: [failed, cover, good]], name: "sources.json")
         var coverHealth = CameraHealth()
-        coverHealth.observe(fingerprint, modified: nil, now: Date().addingTimeInterval(-900))
-        coverHealth.observe(fingerprint, modified: nil, now: Date().addingTimeInterval(-600))
-        try fallbackStore.writeState([cover.id: coverHealth], name: "health.json")
+        coverHealth.observe(fingerprint, modified: nil, now: Date().addingTimeInterval(-1500))
+        coverHealth.observe(fingerprint, modified: nil, now: Date().addingTimeInterval(-1200))
+        // Rotation tries the least recently fetched first; the good camera was fetched after the cover, so the cover is reached first.
+        var goodHealth = CameraHealth(); goodHealth.lastFetched = Date().addingTimeInterval(-700)
+        try fallbackStore.writeState([cover.id: coverHealth, good.id: goodHealth], name: "health.json")
         // Separate URLs ensure a first-candidate transport failure and a second-candidate cover both fall through.
         let distinctSources = [failed, cover, good].enumerated().map { index, source -> CameraSource in
             var source = source; source.imageURL = URL(string: "https://example.org/\(index).png")!; return source
@@ -401,7 +413,7 @@ import UniformTypeIdentifiers
         var cached = CameraHealth(), stamp = now.addingTimeInterval(-600)
         for minutes in [0.0, 5, 10, 15] { cached.observe(fingerprint, modified: stamp, now: now.addingTimeInterval(minutes * 60)) }
         assert(cached.state == .unverified && cached.unchangedCount == 0, "Last-Modified 未变说明 CDN 缓存未更新，不计为静止")
-        print("PASS: dHash 与微小像素变化、封面状态机、封面 ETag 与 CDN 缓存不误判、四分钟比较间隔、失败退避、过期/纯色/小图、平台分散、当轮失败及封面顺延、来源持久化、Skyline/频道解析与旧 manifest")
+        print("PASS: dHash 与微小像素变化、可用镜头轮换、封面状态机、封面 ETag 与 CDN 缓存不误判、四分钟比较间隔、失败退避、过期/纯色/小图、平台分散、当轮失败及封面顺延、来源持久化、Skyline/频道解析与旧 manifest")
 
         try FileManager.default.removeItem(at: temporary)
         print("PASS: 地震/GDACS坐标、旧缓存兼容、RSS 1.0/Atom、多国地图、投影四角、确定且无重叠的标签、昼夜与新闻热点边界")

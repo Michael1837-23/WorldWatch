@@ -15,6 +15,13 @@ struct CameraCity: Identifiable, Sendable {
     let name: String
     let keywords: [String]
     let candidates: [CameraCandidate]
+    var coordinate: MapCoordinate {
+        let points: [String: (Double, Double)] = ["beijing": (116.40, 39.90), "shanghai": (121.47, 31.23), "hongkong": (114.17, 22.30),
+            "chongqing": (106.55, 29.56), "tokyo": (139.69, 35.68), "taipei": (121.56, 25.03), "newyork": (-74.01, 40.71),
+            "losangeles": (-118.24, 34.05), "paris": (2.35, 48.86), "london": (-0.13, 51.51)]
+        let point = points[id] ?? (0, 0)
+        return MapCoordinate(longitude: point.0, latitude: point.1)
+    }
     var englishName: String {
         ["beijing": "Beijing", "shanghai": "Shanghai", "hongkong": "Hong Kong", "chongqing": "Chongqing", "tokyo": "Tokyo", "taipei": "Taipei", "newyork": "New York", "losangeles": "Los Angeles", "paris": "Paris", "london": "London"][id] ?? name
     }

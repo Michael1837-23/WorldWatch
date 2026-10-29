@@ -178,11 +178,13 @@ func rankedCameraSources(_ sources: [CameraSource], health: [String: CameraHealt
         !disabled.contains(source.id) && (skyline || source.platform != .skyline) &&
         !(health[source.id]?.cooldownUntil.map { $0 > now } ?? false)
     }.sorted { a, b in
+        // Usable cameras rotate: the one fetched longest ago goes first, so each round shows a different set
+        // and newly found sources get checked. Covers, offline and failing sources whose cooldown ended retry last.
         let left = health[a.id] ?? CameraHealth(), right = health[b.id] ?? CameraHealth()
-        let leftRank = left.state == .live ? 0 : left.state == .unverified ? 1 : 2
-        let rightRank = right.state == .live ? 0 : right.state == .unverified ? 1 : 2
+        let leftRank = [.live, .unverified].contains(left.state) ? 0 : 1
+        let rightRank = [.live, .unverified].contains(right.state) ? 0 : 1
         if leftRank != rightRank { return leftRank < rightRank }
-        if left.lastChanged != right.lastChanged { return (left.lastChanged ?? .distantPast) > (right.lastChanged ?? .distantPast) }
+        if left.lastFetched != right.lastFetched { return (left.lastFetched ?? .distantPast) < (right.lastFetched ?? .distantPast) }
         return a.id < b.id
     }
     guard let platform = selected.first?.platform, selected.filter({ $0.platform == platform }).count >= 2,

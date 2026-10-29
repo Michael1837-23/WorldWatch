@@ -275,7 +275,11 @@ struct WorldComponentView: View {
     let entry: WorldComponentEntry
     let kind: String
     var cameraStore = CameraSnapshotStore.shared
-    var map: some View { WorldMapCanvas(markers: entry.markers, hotspots: entry.hotspots, sun: entry.sun, settings: entry.settings) }
+    // Only the dashboard shows the camera tiles, so only it pins their cities on the map.
+    var map: some View {
+        WorldMapCanvas(markers: entry.markers, hotspots: entry.hotspots, sun: entry.sun, settings: entry.settings,
+                       cameras: kind == "WorldWatchDashboard" ? entry.cities : [])
+    }
     var body: some View {
         Group {
             if kind == "WorldWatchMap" { map }
@@ -337,7 +341,7 @@ struct WorldLiveWidget: Widget {
 
 @main struct WorldWatchWidgets: WidgetBundle {
     init() {
-        NSLog("世界动态组件目录 2.6/13：WorldWatchNews、WorldWatchDashboard、WorldWatchMap、WorldWatchLive")
+        NSLog("世界动态组件目录 2.6/14：WorldWatchNews、WorldWatchDashboard、WorldWatchMap、WorldWatchLive")
     }
     var body: some Widget {
         WorldWatchWidget()
