@@ -215,7 +215,10 @@ struct WorldComponentEntry: TimelineEntry {
     let date: Date
     let events: [WorldEvent]
     let markers: [MapMarker]
-    let hotspots: [MapHotspot]
+    let conflicts: [MapConflict]
+    let cyclones: [MapCyclone]
+    let weather: [CityWeather]
+    let station: [ISSPoint]
     let sun: MapCoordinate
     let settings: MapSettings
     let cities: [CameraCity]
@@ -237,13 +240,18 @@ struct WorldComponentProvider: TimelineProvider {
                 CameraSnapshotStore.shared.read(city.id)?.fetchedAt.map { Date().timeIntervalSince($0) >= CameraCity.interval * 2 } ?? true
             }
             async let refreshed = refreshNews(snapshot)
+            async let layers = refreshLayers()
             if cameras && !stale.isEmpty { _ = await CameraService.shared.refresh(cities: stale, limit: 1, budget: 20) }
             let latest = await refreshed
+            _ = await layers
             let timeline = entries(snapshot: latest)
             let kind = news ? (cameras ? "WorldWatchDashboard" : "WorldWatchMap") : "WorldWatchLive"
             NSLog("新组件时间线：%@ family=%@ entries=%ld", kind, String(describing: context.family), timeline.count)
             completion(Timeline(entries: timeline, policy: .after(Date().addingTimeInterval(900))))
         }
+    }
+    private func refreshLayers() async {
+        if news { _ = await MapLayerService.shared.refresh(cities: cameras ? CameraCity.selected : [], minimumAge: 3600, budget: 10) }
     }
     private func refreshNews(_ snapshot: NewsSnapshot?) async -> NewsSnapshot? {
         if !news { return snapshot }
@@ -256,15 +264,17 @@ struct WorldComponentProvider: TimelineProvider {
     func entries(snapshot: NewsSnapshot?, now: Date = Date(), minutes: Int = 30) -> [WorldComponentEntry] {
         let all = snapshot?.sourceFeeds?.values.flatMap(\.events) ?? snapshot?.rotationEvents ?? snapshot?.events ?? []
         let retained = mergedEvents(all, now: now)
-        let markers = mapMarkers(retained), hotspots = mapHotspots(retained, now: now)
+        let layers = MapLayerStore.shared
+        let station = layers.station(), weather = cameras ? layers.weather() : []
         let mode = NewsDisplayMode.selected, pool = displayPool(retained, mode: mode, now: now)
         let cities = CameraCity.selected, settings = MapSettings()
         let frames = Dictionary(uniqueKeysWithValues: cities.map { ($0.id, CameraSnapshotStore.shared.read($0.id)?.frames.filter(CameraOptions.allows) ?? []) })
         let spacing = Self.entrySpacing, slot = floor(now.timeIntervalSince1970 / spacing) * spacing
-        return (0..<max(1, Int(Double(minutes * 60) / spacing))).map { index in
+        return (0..<min(10, max(1, Int(Double(minutes * 60) / spacing)))).map { index in
             let date = index == 0 ? now : Date(timeIntervalSince1970: slot + Double(index) * spacing)
             let news = mode == .latest ? Array(pool.prefix(12)) : rotationEvents(pool, at: date, limit: 10).events
-            return WorldComponentEntry(date: date, events: news, markers: markers, hotspots: hotspots, sun: solarPosition(at: date),
+            return WorldComponentEntry(date: date, events: news, markers: mapMarkers(all, now: date), conflicts: mapConflicts(retained, now: date),
+                                       cyclones: layers.cyclones(at: date), weather: weather, station: station, sun: solarPosition(at: date),
                                        settings: settings, cities: cities, frames: frames, index: Int(date.timeIntervalSince1970 / spacing))
         }
     }
@@ -277,8 +287,9 @@ struct WorldComponentView: View {
     var cameraStore = CameraSnapshotStore.shared
     // Only the dashboard shows the camera tiles, so only it pins their cities on the map.
     var map: some View {
-        WorldMapCanvas(markers: entry.markers, hotspots: entry.hotspots, sun: entry.sun, settings: entry.settings,
-                       cameras: kind == "WorldWatchDashboard" ? entry.cities : [])
+        WorldMapCanvas(markers: entry.markers, conflicts: entry.conflicts, sun: entry.sun, settings: entry.settings,
+                       cameras: kind == "WorldWatchDashboard" ? entry.cities : [], date: entry.date,
+                       cyclones: entry.cyclones, weather: entry.weather, station: entry.station)
     }
     var body: some View {
         Group {
@@ -314,7 +325,7 @@ struct WorldDashboardWidget: Widget {
     var body: some WidgetConfiguration {
         StaticConfiguration(kind: kind, provider: WorldComponentProvider()) { WorldComponentView(entry: $0, kind: kind) }
             .configurationDisplayName("世界总览")
-            .description("世界地图、四座城市实景截图与新闻。新闻热点按提及量估计，非核实的冲突数据。")
+            .description("世界地图、四座城市实景截图与新闻。冲突颜色按 48 小时新闻估计，非核实的冲突数据。")
             .supportedFamilies([.systemExtraLarge])
     }
 }
@@ -324,7 +335,7 @@ struct WorldMapWidget: Widget {
     var body: some WidgetConfiguration {
         StaticConfiguration(kind: kind, provider: WorldComponentProvider(cameras: false)) { WorldComponentView(entry: $0, kind: kind) }
             .configurationDisplayName("世界地图")
-            .description("国家、地震、灾害与昼夜。新闻热点按提及量估计，非核实的冲突数据。")
+            .description("国家、地震、灾害与昼夜。冲突颜色按 48 小时新闻估计，非核实的冲突数据。")
             .supportedFamilies([.systemLarge, .systemExtraLarge])
     }
 }
@@ -341,7 +352,7 @@ struct WorldLiveWidget: Widget {
 
 @main struct WorldWatchWidgets: WidgetBundle {
     init() {
-        NSLog("世界动态组件目录 2.6/14：WorldWatchNews、WorldWatchDashboard、WorldWatchMap、WorldWatchLive")
+        NSLog("世界动态组件目录 2.7/15：WorldWatchNews、WorldWatchDashboard、WorldWatchMap、WorldWatchLive")
     }
     var body: some Widget {
         WorldWatchWidget()

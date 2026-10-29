@@ -7,7 +7,10 @@ struct MapSettings: Sendable {
     var earthquakes = WorldPreferences.enabled("mapEarthquakes")
     var disasters = WorldPreferences.enabled("mapDisasters")
     var night = WorldPreferences.enabled("mapNight")
-    var hotspots = WorldPreferences.enabled("mapHotspots")
+    var conflicts = WorldPreferences.enabled("mapConflicts")
+    var cyclones = WorldPreferences.enabled("mapCyclones")
+    var cityWeather = WorldPreferences.enabled("mapCityWeather")
+    var iss = WorldPreferences.enabled("mapISS")
 }
 
 /// Tile order colors, shared by the map pins and the city labels so each picture can be found on the map.
@@ -16,11 +19,16 @@ let cameraAccents: [Color] = [Color(red: 0.25, green: 0.62, blue: 1.0), Color(re
                               Color(red: 0.69, green: 0.45, blue: 1.0), Color(red: 1.0, green: 0.42, blue: 0.7)]
 
 struct WorldMapCanvas: View {
+    @Environment(\.colorScheme) private var colorScheme
     let markers: [MapMarker]
-    let hotspots: [MapHotspot]
+    let conflicts: [MapConflict]
     let sun: MapCoordinate
     var settings = MapSettings()
     var cameras: [CameraCity] = []
+    var date = Date()
+    var cyclones: [MapCyclone] = []
+    var weather: [CityWeather] = []
+    var station: [ISSPoint] = []
     var body: some View {
         Canvas { context, size in
             guard size.width > 0, size.height > 0 else { return }
@@ -49,6 +57,9 @@ struct WorldMapCanvas: View {
                     }
                 }
                 context.fill(path, with: .color(Color.primary.opacity(0.10)), style: FillStyle(eoFill: true))
+                if settings.conflicts, let conflict = conflicts.first(where: { $0.countryID == country.id }), conflict.level > 0 {
+                    context.fill(path, with: .color(.red.opacity([0.10, 0.18, 0.28, 0.40][conflict.level - 1])), style: FillStyle(eoFill: true))
+                }
                 context.stroke(path, with: .color(Color.primary.opacity(0.18)), lineWidth: 0.5)
             }
             if settings.night {
@@ -70,27 +81,79 @@ struct WorldMapCanvas: View {
                     context.fill(night, with: .color(.black.opacity(0.22)))
                 }
             }
-            if settings.hotspots {
-                for hotspot in hotspots {
-                    let center = projection.visible(hotspot.coordinate)
-                    // Mention counts are a rough 24-hour signal, so they stay a faint wash under the live layers.
-                    let radius = min(14, 3 + sqrt(Double(hotspot.count)) * 1.6)
-                    context.fill(Path(ellipseIn: CGRect(x: center.x - radius, y: center.y - radius, width: radius * 2, height: radius * 2)), with: .color(.orange.opacity(0.16)))
+            var labels: [MapLabel] = []
+            let visibleMarkers = markers.filter { $0.earthquake ? settings.earthquakes : settings.disasters }
+            let visibleCyclones = settings.cyclones ? cyclones : []
+            let position = settings.iss ? issPosition(station, at: date) : nil
+            let anchors = visibleMarkers.map(\.coordinate) + visibleCyclones.compactMap(\.current) + cameras.map(\.coordinate) + (position.map { [$0] } ?? [])
+            let obstacles = anchors.map { point -> CGRect in
+                let center = projection.visible(point)
+                return CGRect(x: center.x - 6, y: center.y - 6, width: 12, height: 12)
+            }
+            func label(_ texts: [String], id: String, at point: MapCoordinate) {
+                placeMapLabel(texts, id: id, at: projection.visible(point), projection: projection, labels: &labels, obstacles: obstacles)
+            }
+            func track(_ points: [MapCoordinate], color: Color, dashed: Bool) {
+                for segment in mapSegments(points) {
+                    var path = Path()
+                    var previous: CGPoint?
+                    for point in segment {
+                        let center = projection.visible(point)
+                        if let previous, abs(center.x - previous.x) <= size.width / 2 { path.addLine(to: center) }
+                        else { path.move(to: center) }
+                        previous = center
+                    }
+                    context.stroke(path, with: .color(color), style: StrokeStyle(lineWidth: 1.2, dash: dashed ? [3, 3] : []))
                 }
             }
-            for marker in markers {
-                guard marker.earthquake ? settings.earthquakes : settings.disasters else { continue }
+            if let position {
+                if colorScheme == .light { track(station.map(\.coordinate), color: .black.opacity(0.20), dashed: true) }
+                track(station.map(\.coordinate), color: .white.opacity(0.35), dashed: true)
+                let center = projection.visible(position)
+                let dot = Path(ellipseIn: CGRect(x: center.x - 3, y: center.y - 3, width: 6, height: 6))
+                context.fill(dot, with: .color(.white))
+                context.stroke(dot, with: .color(.black.opacity(0.8)), lineWidth: 0.8)
+                label(["ISS"], id: "iss", at: position)
+            }
+            for cyclone in visibleCyclones {
+                let color: Color = cyclone.red ? .red : .orange
+                track(cyclone.history, color: color.opacity(0.8), dashed: false)
+                track(cyclone.forecast, color: color.opacity(0.8), dashed: true)
+                if let point = cyclone.current {
+                    var icon = context.resolve(Image(systemName: "hurricane"))
+                    icon.shading = .color(color)
+                    context.draw(icon, in: CGRect(x: projection.visible(point).x - 6, y: projection.visible(point).y - 6, width: 12, height: 12))
+                    label([cyclone.name], id: "cyclone", at: point)
+                }
+            }
+            for marker in visibleMarkers {
+                let count = labels.count
+                label([marker.label], id: "event", at: marker.coordinate)
+                guard labels.count > count else { continue }
                 let center = projection.visible(marker.coordinate)
-                let radius = marker.magnitude.map { max(2.5, min(8, $0 - 2)) } ?? 3.5
+                let radius = marker.magnitude.map { max(2.5, min(8, $0 - 2)) } ?? 4
                 let color: Color = marker.red ? .red : .orange
-                if let magnitude = marker.magnitude, magnitude >= 6.5 {
-                    context.fill(Path(ellipseIn: CGRect(x: center.x - radius - 4, y: center.y - radius - 4, width: radius * 2 + 8, height: radius * 2 + 8)), with: .color(color.opacity(0.18)))
+                if let symbol = marker.symbol {
+                    var icon = context.resolve(Image(systemName: symbol))
+                    icon.shading = .color(color)
+                    context.draw(icon, in: CGRect(x: center.x - 5, y: center.y - 5, width: 10, height: 10))
+                } else {
+                    context.fill(Path(ellipseIn: CGRect(x: center.x - radius, y: center.y - radius, width: radius * 2, height: radius * 2)), with: .color(color))
                 }
-                context.fill(Path(ellipseIn: CGRect(x: center.x - radius, y: center.y - radius, width: radius * 2, height: radius * 2)), with: .color(color))
             }
-            for label in mapLabels(projection: projection) {
-                context.draw(Text(label.text).font(.system(size: 9, weight: .semibold)).foregroundStyle(.secondary),
-                             at: CGPoint(x: label.rect.midX, y: label.rect.midY))
+            if settings.cityWeather {
+                for city in cameras {
+                    let conditions = cityConditions(city, at: date, weather: weather)
+                    label([city.englishName + " " + conditions, conditions], id: "city:" + city.id, at: city.coordinate)
+                }
+            }
+            for item in mapLabels(projection: projection, reserved: labels + obstacles.map { MapLabel(countryID: "obstacle", text: "", rect: $0) }) where !item.text.isEmpty {
+                let dynamic = ["iss", "cyclone", "event"].contains(item.countryID) || item.countryID.hasPrefix("city:")
+                let text = Text(item.text).font(.system(size: 9, weight: .semibold)).foregroundColor(dynamic ? .primary : .secondary)
+                if dynamic {
+                    context.fill(Path(roundedRect: item.rect, cornerRadius: 2), with: .color(Color(nsColor: .windowBackgroundColor).opacity(0.82)))
+                }
+                context.draw(text, at: CGPoint(x: item.rect.midX, y: item.rect.midY))
             }
             for (index, city) in cameras.prefix(cameraAccents.count).enumerated() {
                 let center = projection.visible(city.coordinate), color = cameraAccents[index]
@@ -103,7 +166,7 @@ struct WorldMapCanvas: View {
         .clipped()
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("\(settings.region.rawValue)地图")
-        .accessibilityValue(settings.hotspots ? "新闻热点按新闻提及量估计，非核实的冲突数据" : "国家边界和灾害位置")
+        .accessibilityValue(settings.conflicts ? "按 48 小时新闻中冲突类报道的数量与严重程度估计，颜色越深越严重；非核实的冲突数据" : "国家边界和灾害位置")
     }
 }
 

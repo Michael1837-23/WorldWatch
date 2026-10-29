@@ -5,10 +5,16 @@ enum WorldPreferences {
         let group = Bundle.main.object(forInfoDictionaryKey: "WorldWatchAppGroup") as? String
         return group.flatMap { UserDefaults(suiteName: $0) } ?? .standard
     }
-    static func enabled(_ key: String) -> Bool { shared.object(forKey: key) as? Bool ?? true }
+    static func enabled(_ key: String) -> Bool { enabled(key, in: shared) }
+    static func enabled(_ key: String, in defaults: UserDefaults) -> Bool {
+        if key == "mapConflicts", defaults.object(forKey: key) == nil {
+            defaults.set(defaults.object(forKey: "mapHotspots") as? Bool ?? true, forKey: key)
+        }
+        return defaults.object(forKey: key) as? Bool ?? true
+    }
 }
 
-struct MapCoordinate: Equatable, Sendable {
+struct MapCoordinate: Codable, Equatable, Sendable {
     var longitude: Double
     var latitude: Double
 }
@@ -117,8 +123,8 @@ struct MapLabel: Equatable {
     let rect: CGRect
 }
 
-func mapLabels(projection: MapProjection) -> [MapLabel] {
-    var result: [MapLabel] = []
+func mapLabels(projection: MapProjection, reserved: [MapLabel] = []) -> [MapLabel] {
+    var result = reserved
     let frame = CGRect(origin: .zero, size: projection.size)
     let limit = min(30, max(6, Int(projection.size.width * projection.size.height / 6000)))
     for country in WorldMap.ranked {
@@ -128,9 +134,24 @@ func mapLabels(projection: MapProjection) -> [MapLabel] {
         let rect = CGRect(x: center.x - width / 2, y: center.y - 7, width: width, height: 14)
         guard frame.contains(rect), !result.contains(where: { $0.rect.intersects(rect) }) else { continue }
         result.append(MapLabel(countryID: country.id, text: country.name, rect: rect))
-        if result.count >= limit { break }
+        if result.count - reserved.count >= limit { break }
     }
     return result
+}
+
+func placeMapLabel(_ texts: [String], id: String, at center: CGPoint, projection: MapProjection, labels: inout [MapLabel], obstacles: [CGRect] = []) {
+    let frame = CGRect(origin: .zero, size: projection.size)
+    guard frame.contains(center) else { return }
+    for text in texts {
+        let width = Double(text.count) * 5.6 + 8
+        for offset in [CGPoint(x: 9, y: -16), CGPoint(x: 9, y: 3), CGPoint(x: -width - 9, y: -16),
+                       CGPoint(x: -width - 9, y: 3), CGPoint(x: -width / 2, y: -23), CGPoint(x: -width / 2, y: 10)] {
+            let rect = CGRect(x: center.x + offset.x, y: center.y + offset.y, width: width, height: 14)
+            if frame.contains(rect), !labels.contains(where: { $0.rect.intersects(rect) }), !obstacles.contains(where: { $0.intersects(rect) }) {
+                labels.append(MapLabel(countryID: id, text: text, rect: rect)); return
+            }
+        }
+    }
 }
 
 func solarPosition(at date: Date) -> MapCoordinate {
@@ -157,23 +178,55 @@ struct MapMarker: Equatable, Sendable {
     let red: Bool
     let magnitude: Double?
     let earthquake: Bool
+    let label: String
+    let symbol: String?
 }
 
-func mapMarkers(_ events: [WorldEvent]) -> [MapMarker] {
+func mapMarkers(_ events: [WorldEvent], now: Date = Date()) -> [MapMarker] {
     events.filter(\.disaster).compactMap { event in
-        guard let lat = event.latitude, let lon = event.longitude, abs(lat) <= 90, abs(lon) <= 180 else { return nil }
-        return MapMarker(coordinate: .init(longitude: lon, latitude: lat), red: event.sourceID == "usgs" || event.severity == "红色预警", magnitude: event.magnitude, earthquake: event.sourceID == "usgs")
+        guard let lat = event.latitude, let lon = event.longitude, lat.isFinite, lon.isFinite,
+              abs(lat) <= 90, abs(lon) <= 180 else { return nil }
+        let coordinate = MapCoordinate(longitude: lon, latitude: lat)
+        if event.sourceID == "usgs" {
+            guard let date = event.date, date <= now, date >= now.addingTimeInterval(-86400),
+                  let magnitude = event.magnitude, magnitude.isFinite, magnitude >= 6 else { return nil }
+            return MapMarker(coordinate: coordinate, red: true, magnitude: magnitude, earthquake: true,
+                             label: String(format: "M%.1f", magnitude), symbol: nil)
+        }
+        guard event.sourceID == "gdacs", let type = event.eventType, !["DR", "TC", "EQ"].contains(type),
+              ["红色预警", "橙色预警"].contains(event.severity ?? ""),
+              let end = event.endDate ?? event.date, end >= now.addingTimeInterval(-3 * 86400),
+              event.date.map({ $0 <= now }) ?? true else { return nil }
+        let labels = ["FL": "Flood", "VO": "Volcano", "WF": "Wildfire", "TS": "Tsunami"]
+        let symbols = ["FL": "drop.fill", "VO": "mountain.2.fill", "WF": "flame.fill", "TS": "water.waves"]
+        return MapMarker(coordinate: coordinate, red: event.severity == "红色预警", magnitude: nil, earthquake: false,
+                         label: labels[type] ?? "Alert", symbol: symbols[type] ?? "exclamationmark.triangle.fill")
     }.sorted {
         if $0.coordinate.latitude != $1.coordinate.latitude { return $0.coordinate.latitude < $1.coordinate.latitude }
-        if $0.coordinate.longitude != $1.coordinate.longitude { return $0.coordinate.longitude < $1.coordinate.longitude }
-        return ($0.magnitude ?? 0) < ($1.magnitude ?? 0)
+        return $0.coordinate.longitude < $1.coordinate.longitude
     }
 }
 
-struct MapHotspot: Equatable, Sendable {
+struct MapConflict: Equatable, Sendable {
     let countryID: String
-    let coordinate: MapCoordinate
-    let count: Int
+    let score: Int
+    var level: Int { conflictLevel(score) }
+}
+
+let conflictThresholds = [3, 8, 16, 30]
+func conflictLevel(_ score: Int) -> Int { conflictThresholds.filter { score >= $0 }.count }
+
+private let conflictPatterns = [
+    #"(?i)\b(airstrikes?|missiles?|shelling|bombing|invasion|massacre|killed|dead|casualties)\b|空袭|空襲|导弹|導彈|炮击|炮擊|轰炸|轟炸|入侵|死亡|遇难|遇難|伤亡|傷亡"#,
+    #"(?i)\b(war|fighting|clashes|offensive|drone strikes?|hostages?|troops)\b|战争|戰爭|交火|冲突|衝突|进攻|進攻|无人机袭击|無人機襲擊|人质|人質|军队|軍隊"#,
+    #"(?i)\b(military|ceasefire|sanctions|tensions|truce)\b|军事|軍事|停火|制裁|紧张局势|緊張局勢"#
+].map { try! NSRegularExpression(pattern: $0) }
+
+func conflictWeight(_ title: String) -> Int {
+    for (index, regex) in conflictPatterns.enumerated() {
+        if regex.firstMatch(in: title, range: NSRange(title.startIndex..., in: title)) != nil { return 3 - index }
+    }
+    return 0
 }
 
 private let countryAliases: [String: [String]] = [
@@ -215,14 +268,13 @@ private let countryMatchers: [(MapCountry, NSRegularExpression)] = WorldMap.coun
     return (country, regex)
 }
 
-func mapHotspots(_ events: [WorldEvent], now: Date = Date()) -> [MapHotspot] {
-    // Domestic feeds mention 中国 in most headlines, which would pin China as the top hotspot regardless of world news.
-    let recent = events.filter { !$0.disaster && !$0.isDomestic && $0.date.map { $0 <= now && $0 >= now.addingTimeInterval(-86400) } == true }
+func mapConflicts(_ events: [WorldEvent], now: Date = Date()) -> [MapConflict] {
+    let recent = events.filter { !$0.disaster && !$0.isDomestic && $0.date.map { $0 <= now && $0 >= now.addingTimeInterval(-48 * 3600) } == true }
+        .map { ($0.title, conflictWeight($0.title)) }.filter { $0.1 > 0 }
     return countryMatchers.compactMap { country, regex in
-        let count = recent.reduce(0) { count, event in
-            let title = event.title
-            return count + (regex.firstMatch(in: title, range: NSRange(title.startIndex..., in: title)) == nil ? 0 : event.isNoteworthy ? 2 : 1)
+        let score = recent.reduce(0) { score, item in
+            score + (regex.firstMatch(in: item.0, range: NSRange(item.0.startIndex..., in: item.0)) == nil ? 0 : item.1)
         }
-        return count == 0 ? nil : MapHotspot(countryID: country.id, coordinate: country.label, count: count)
-    }.sorted { $0.count == $1.count ? $0.countryID < $1.countryID : $0.count > $1.count }.prefix(12).map { $0 }
+        return conflictLevel(score) == 0 ? nil : MapConflict(countryID: country.id, score: score)
+    }.sorted { $0.score == $1.score ? $0.countryID < $1.countryID : $0.score > $1.score }.prefix(15).map { $0 }
 }

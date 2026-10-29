@@ -59,6 +59,8 @@ struct WorldEvent: Identifiable, Codable, Sendable {
     var latitude: Double? = nil
     var longitude: Double? = nil
     var magnitude: Double? = nil
+    var eventType: String? = nil
+    var endDate: Date? = nil
     var displayTitle: String { translatedTitle ?? title }
     var sourceName: String { NewsSource.all.first { $0.id == sourceID }?.name ?? sourceID }
     var isDomestic: Bool { NewsSource.all.first { $0.id == sourceID }?.domestic ?? false }
@@ -335,7 +337,7 @@ enum FeedError: LocalizedError {
 private let isoDateFormatters: [ISO8601DateFormatter] = [[.withInternetDateTime, .withFractionalSeconds], [.withInternetDateTime]].map { (options: ISO8601DateFormatter.Options) in
     let formatter = ISO8601DateFormatter(); formatter.formatOptions = options; return formatter
 }
-private let feedDateFormatters: [DateFormatter] = ["EEE, dd MMM yyyy HH:mm:ss Z", "EEE, d MMM yyyy HH:mm:ss Z", "dd MMM yyyy HH:mm:ss Z", "yyyy-MM-dd HH:mm:ss", "EEE, dd MMM yyyy HH:mm Z"].map { format in
+private let feedDateFormatters: [DateFormatter] = ["EEE, dd MMM yyyy HH:mm:ss Z", "EEE, d MMM yyyy HH:mm:ss Z", "dd MMM yyyy HH:mm:ss Z", "yyyy-MM-dd HH:mm:ss", "yyyy-MM-dd'T'HH:mm:ss", "EEE, dd MMM yyyy HH:mm Z"].map { format in
     let formatter = DateFormatter()
     formatter.locale = Locale(identifier: "en_US_POSIX")
     formatter.timeZone = TimeZone(secondsFromGMT: 0)
@@ -446,7 +448,9 @@ final class RSSReader: NSObject, XMLParserDelegate {
                                  severity: alert == "red" ? "红色预警" : alert == "orange" ? "橙色预警" : nil,
                                  translatedTitle: source.language == "zh" ? title.applyingTransform(StringTransform("Traditional-Simplified"), reverse: false) : nil,
                                  latitude: fields["geo:lat"].flatMap { Double($0.trimmingCharacters(in: .whitespacesAndNewlines)) },
-                                 longitude: fields["geo:long"].flatMap { Double($0.trimmingCharacters(in: .whitespacesAndNewlines)) }))
+                                 longitude: fields["geo:long"].flatMap { Double($0.trimmingCharacters(in: .whitespacesAndNewlines)) },
+                                 eventType: fields["gdacs:eventtype"]?.trimmingCharacters(in: .whitespacesAndNewlines).uppercased(),
+                                 endDate: parseDate(fields["gdacs:todate"])))
     }
 }
 
@@ -496,7 +500,7 @@ func fetchSource(_ source: NewsSource, timeout: Double = 25) async throws -> [Wo
     var request = URLRequest(url: source.url)
     request.timeoutInterval = timeout
     request.cachePolicy = .reloadIgnoringLocalCacheData
-    request.setValue("WorldWatch/2.6 (personal desktop news reader)", forHTTPHeaderField: "User-Agent")
+    request.setValue("WorldWatch/2.7 (personal desktop news reader)", forHTTPHeaderField: "User-Agent")
     for attempt in 0..<2 {
         do {
             let (data, response) = try await newsSession.data(for: request)

@@ -5,6 +5,30 @@ import UniformTypeIdentifiers
 
 @main struct FeedCheck {
     static func main() async throws {
+        if CommandLine.arguments.contains("--map-layers") {
+            let store = MapLayerStore(root: URL(fileURLWithPath: FileManager.default.currentDirectoryPath).appendingPathComponent(".build/acceptance-2.7/MapLayers"))
+            let preferencesURL = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Group Containers/R58LB5VQ4A.local.michael.worldwatch/Library/Preferences/R58LB5VQ4A.local.michael.worldwatch.plist")
+            let preferences = (try? PropertyListSerialization.propertyList(from: Data(contentsOf: preferencesURL), format: nil)) as? [String: Any]
+            let ids = preferences?["cameraCities"] as? [String] ?? CameraCity.defaults
+            let cities = Array(ids.compactMap { id in CameraCity.all.first { $0.id == id } }.prefix(4))
+            _ = await MapLayerService(store: store).refresh(cities: cities, minimumAge: 0, budget: 40)
+            let now = Date()
+            print("实测 UTC：\(now.formatted(.iso8601))")
+            let cyclones = store.cyclones(at: now)
+            print("活跃台风：\(cyclones.count)")
+            for track in cyclones { print("\(track.name) · \(track.red ? "Red" : "Orange") · 历史 \(track.history.count)／预测 \(track.forecast.count)") }
+            for city in cities { print("城市 \(city.englishName) \(cityConditions(city, at: now, weather: store.weather()))") }
+            let orbit = store.station()
+            print("ISS 轨迹点数：\(orbit.count)")
+            if let position = issPosition(orbit, at: now) { print("ISS：\(position.latitude), \(position.longitude)") }
+            let group = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Group Containers/R58LB5VQ4A.local.michael.worldwatch/WorldWatch/widget-snapshot.json")
+            if let snapshot = NewsSnapshotStore(fileURL: group).read() {
+                for item in mapConflicts(snapshot.sourceFeeds?.values.flatMap(\.events) ?? snapshot.events, now: now).prefix(10) {
+                    print("冲突 \(WorldMap.countries.first { $0.id == item.countryID }!.name)：\(item.score) 分／\(item.level) 级")
+                }
+            }
+            return
+        }
         if CommandLine.arguments.contains("--cameras") {
             let store = CameraSnapshotStore(root: URL(fileURLWithPath: FileManager.default.currentDirectoryPath).appendingPathComponent(".build/camera-probe"))
             let service = CameraService(store: store)
@@ -195,7 +219,7 @@ import UniformTypeIdentifiers
         let pointXML = #"<rss xmlns:geo="http://www.w3.org/2003/01/geo/wgs84_pos#" xmlns:gdacs="http://www.gdacs.org"><channel><item><title>Red flood</title><link>https://example.org/flood</link><gdacs:alertlevel>Red</gdacs:alertlevel><geo:Point><geo:lat>25.1</geo:lat><geo:long>120.2</geo:long></geo:Point></item></channel></rss>"#
         let flood = try parseFeed(Data(pointXML.utf8), source: gdacs)[0]
         assert(flood.latitude == 25.1 && flood.longitude == 120.2 && legacy.latitude == nil && legacy.longitude == nil)
-        assert(mapMarkers([located, flood]).count == 2)
+        assert(mapMarkers([located], now: located.date!.addingTimeInterval(3600)).first?.label == "M6.8")
         let rdf = #"<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns="http://purl.org/rss/1.0/" xmlns:dc="http://purl.org/dc/elements/1.1/"><item><title>DW international</title><link>https://example.org/dw</link><dc:date>2026-10-27T12:00:00Z</dc:date></item></rdf:RDF>"#
         let rdfEvents = try parseFeed(Data(rdf.utf8), source: source)
         assert(rdfEvents.first?.date == now)
@@ -220,8 +244,8 @@ import UniformTypeIdentifiers
         let sun = solarPosition(at: now)
         assert(!isNight(sun, sun: sun))
         assert(isNight(.init(longitude: sun.longitude + 180, latitude: -sun.latitude), sun: sun))
-        let hits = mapHotspots([headline("israel-en", "Israel ceasefire", "bbc", 1), headline("israel-zh", "以色列停火", "cns-world", 2), headline("ireland", "Ireland opens a museum", "bbc", 3)], now: now)
-        assert(hits.first { $0.countryID == "ISR" }?.count == 4)
+        let hits = mapConflicts([headline("israel-en", "Israel ceasefire", "bbc", 1), headline("israel-zh", "以色列停火", "cns-world", 2), headline("ireland", "Ireland opens a museum", "bbc", 3)], now: now)
+        assert(hits.isEmpty, "低于 3 分不染色")
         assert(!hits.contains { $0.countryID == "IRN" })
         assert(youtubeVideoIDs(#"{"videoId":"abcdefghijk"}{"videoId":"123456789_-"}{"videoId":"abcdefghijk"}"#) == ["abcdefghijk", "123456789_-"])
         let youtubeHTML = #"<script>var ytInitialData = {"contents":[{"videoRenderer":{"videoId":"abcdefghijk","title":{"runs":[{"text":"Tokyo Shibuya live camera"}]},"badges":[{"metadataBadgeRenderer":{"style":"BADGE_STYLE_TYPE_LIVE_NOW"}}]}},{"videoRenderer":{"videoId":"123456789_-","title":{"runs":[{"text":"Paris SkylineWebcams"}]},"badges":[{"metadataBadgeRenderer":{"style":"BADGE_STYLE_TYPE_LIVE_NOW"}}]}}]};</script>"#
@@ -237,8 +261,8 @@ import UniformTypeIdentifiers
         assert(!bilibiliSceneTitle("纽约街景点歌聊天", city: newYork))
         assert(!bilibiliSceneTitle("【直播】重庆狼队 vs 长沙TES.A", city: chongqing) && !bilibiliSceneTitle("窗外街景｜北京朝阳大悦城实时街景", city: chongqing), "排除电竞与其他城市")
         assert(WorldMap.countries.first { $0.id == "CHN" }?.name == "China" && WorldMap.countries.first { $0.id == "USA" }?.name == "United States")
-        assert(mapHotspots([headline("china-en", "China announces export rules", "bbc", 1)], now: now).first?.countryID == "CHN", "英文 China 计入中国")
-        assert(mapHotspots([headline("china-domestic", "中国发布新规", "cns-china", 1)], now: now).isEmpty, "国内来源不计入热点")
+        assert(mapConflicts([headline("china-en", "China missile airstrike", "bbc", 1)], now: now).first?.countryID == "CHN", "英文 China 计入中国")
+        assert(mapConflicts([headline("china-domestic", "中国发布新规", "cns-china", 1)], now: now).isEmpty, "国内来源不计入冲突")
         assert(cameraJPEG(Data(repeating: 0, count: 6000)) == nil)
         assert(cameraRotationIndex(entry: 19, city: 3, count: 1) == 0)
         assert((0..<4).map { cameraRotationIndex(entry: 0, city: $0, count: 3) } == [0, 1, 2, 0])
@@ -416,8 +440,91 @@ import UniformTypeIdentifiers
         print("PASS: dHash 与微小像素变化、可用镜头轮换、封面状态机、封面 ETag 与 CDN 缓存不误判、四分钟比较间隔、失败退避、过期/纯色/小图、平台分散、当轮失败及封面顺延、来源持久化、Skyline/频道解析与旧 manifest")
 
         try FileManager.default.removeItem(at: temporary)
-        print("PASS: 地震/GDACS坐标、旧缓存兼容、RSS 1.0/Atom、多国地图、投影四角、确定且无重叠的标签、昼夜与新闻热点边界")
+        print("PASS: 地震/GDACS坐标、旧缓存兼容、RSS 1.0/Atom、多国地图、投影四角、确定且无重叠的标签、昼夜与冲突边界")
         print("PASS: 直播ID去重与城市过滤、B站开播状态和HTTPS、B站房间号与街景标题过滤、国家短名与国内来源排除、无效图片拒绝、四城错位轮换、截图缓存旧请求保护")
+        func earthquake(_ hours: Double, _ magnitude: Double) -> WorldEvent {
+            WorldEvent(id: "q", sourceID: "usgs", title: "Earthquake", url: imageLink, date: now.addingTimeInterval(-hours * 3600),
+                       timeKind: "发生", disaster: true, severity: nil, latitude: 20, longitude: 120, magnitude: magnitude)
+        }
+        assert(mapMarkers([earthquake(25, 7), earthquake(1, 5.8)], now: now).isEmpty)
+        assert(mapMarkers([earthquake(1, 6.2)], now: now).first?.label == "M6.2")
+        func gdacsEvent(_ type: String, ended: Double) -> WorldEvent {
+            WorldEvent(id: type, sourceID: "gdacs", title: type, url: imageLink, date: now.addingTimeInterval(-10 * 86400),
+                       timeKind: "发生", disaster: true, severity: "红色预警", latitude: 10, longitude: 20,
+                       eventType: type, endDate: now.addingTimeInterval(ended))
+        }
+        assert(mapMarkers([gdacsEvent("DR", ended: 3600), gdacsEvent("FL", ended: -4 * 86400), gdacsEvent("TC", ended: 3600), gdacsEvent("EQ", ended: 3600)], now: now).isEmpty)
+        assert(mapMarkers([gdacsEvent("VO", ended: 3600)], now: now).first?.symbol == "mountain.2.fill")
+        let metadataXML = "<rss xmlns:gdacs=\"http://www.gdacs.org\"><channel><item><title>Volcano</title><link>https://example.org/v</link><gdacs:alertlevel>Red</gdacs:alertlevel><gdacs:eventtype>VO</gdacs:eventtype><gdacs:todate>2026-10-28T00:00:00</gdacs:todate></item></channel></rss>"
+        let metadata = try parseFeed(Data(metadataXML.utf8), source: gdacs)[0]
+        assert(metadata.eventType == "VO" && metadata.endDate == parseDate("2026-10-28T00:00:00Z"))
+        assert(legacy.eventType == nil && legacy.endDate == nil)
+        let cycloneJSON = Data(#"{"features":[{"properties":{"eventid":1,"name":"Tropical Cyclone ARNAB-26","alertlevel":"Red","todate":"2026-10-27T09:00:00","url":{"geometry":"https://www.gdacs.org/geometry"}}},{"properties":{"eventid":2,"name":"Tropical Cyclone OLD-26","alertlevel":"Orange","todate":"2026-10-25T00:00:00Z","url":{"geometry":"https://www.gdacs.org/geometry"}}}]}"#.utf8)
+        let active = try parseCycloneEvents(cycloneJSON, now: now)
+        assert(active.count == 1 && active[0].name == "ARNAB")
+        func line(_ a: Int, _ forecast: Bool) -> [String: Any] {
+            ["properties": ["Class": "Line_Line_\(a)", "forecast": forecast], "geometry": ["type": "LineString", "coordinates": [[Double(a), 10], [Double(a + 1), 10]]]]
+        }
+        let geometryJSON = try JSONSerialization.data(withJSONObject: ["features": (0..<100).reversed().map { line($0, $0 >= 70) } + [["properties": ["Class": "Poly_Red"], "geometry": ["type": "Polygon", "coordinates": []]]]])
+        let track = try parseCycloneGeometry(geometryJSON, event: active[0])
+        assert(track.history.first?.longitude == 0 && track.history.last?.longitude == 70)
+        assert(track.forecast.first?.longitude == 70 && track.forecast.last?.longitude == 100)
+        assert(track.history.count + track.forecast.count <= 60 && track.current?.longitude == 70)
+        let realGeometry = try Data(contentsOf: URL(fileURLWithPath: "Tests/Fixtures/cyclone-arnab.json"))
+        let realTrack = try parseCycloneGeometry(realGeometry, event: active[0])
+        assert(realTrack.history.count == 8 && realTrack.forecast.count == 5)
+        assert(realTrack.history.first == MapCoordinate(longitude: 89.1, latitude: 16))
+        assert(realTrack.current == MapCoordinate(longitude: 81.6, latitude: 16.4))
+        assert(realTrack.forecast.last == MapCoordinate(longitude: 81.6, latitude: 21.9))
+        assert(mapConflicts([headline("highest", "Iran airstrike despite ceasefire", "bbc", 1)], now: now).first?.score == 3)
+        let disasterHeadline = WorldEvent(id: "disaster-title", sourceID: "gdacs", title: "Iran airstrike killed", url: imageLink,
+                                         date: now, timeKind: "发生", disaster: true, severity: "红色预警")
+        assert(mapConflicts([disasterHeadline], now: now).isEmpty)
+        assert(conflictWeight("Iran airstrike despite ceasefire") == 3)
+        assert(conflictWeight("Iran 军事进攻与伤亡") == 3 && conflictWeight("warship awards") == 0)
+        assert((0...32).map(conflictLevel) == (0...32).map { score in score >= 30 ? 4 : score >= 16 ? 3 : score >= 8 ? 2 : score >= 3 ? 1 : 0 })
+        assert(mapConflicts([headline("domestic", "中国导弹空袭", "cns-china", 1)], now: now).isEmpty)
+        assert(mapConflicts([headline("48h", "Iran missiles", "bbc", 48 * 3600 + 1)], now: now).isEmpty)
+        assert(mapConflicts([headline("36h", "Iran missiles", "bbc", 36 * 3600)], now: now).first?.score == 3)
+        assert(mapConflicts([headline("irish", "Ireland military airstrikes", "bbc", 1)], now: now).allSatisfy { $0.countryID != "IRN" })
+        let many = WorldMap.ranked.prefix(25).enumerated().map { headline("conflict\($0.offset)", $0.element.name + " airstrikes", "bbc", 1) }
+        assert(mapConflicts(many, now: now).count == 15)
+        assert(cityTime(newYork, at: parseDate("2026-11-01T05:30:00Z")!) == "01:30")
+        assert(cityTime(newYork, at: parseDate("2026-11-01T06:30:00Z")!) == "01:30")
+        assert(cityTime(newYork, at: parseDate("2026-11-01T07:30:00Z")!) == "02:30")
+        let tokyo = CameraCity.all.first { $0.id == "tokyo" }!
+        assert(cityTime(tokyo, at: parseDate("2026-11-01T05:30:00Z")!) == "14:30")
+        let meteo = Data(#"[{"current":{"temperature_2m":8.3,"time":"2026-10-27T12:00"}},{"current":{"temperature_2m":18.6,"time":"2026-10-27T12:00"}}]"#.utf8)
+        let weather = try parseCityWeather(meteo, cities: [newYork, tokyo])
+        assert(weather.count == 2 && weather[0].temperature == 8.3 && weather[1].cityID == "tokyo")
+        assert(cityConditions(newYork, at: now, weather: weather).hasSuffix("8°"))
+        assert(!cityConditions(newYork, at: now.addingTimeInterval(3 * 3600 + 1), weather: weather).contains("°"))
+        let orbit = [ISSPoint(date: now, coordinate: .init(longitude: 179, latitude: 0)), ISSPoint(date: now.addingTimeInterval(300), coordinate: .init(longitude: -179, latitude: 10))]
+        let midpoint = issPosition(orbit, at: now.addingTimeInterval(150))!
+        assert(abs(midpoint.longitude) == 180 && midpoint.latitude == 5)
+        assert(issPosition(orbit, at: now.addingTimeInterval(301)) == nil)
+        assert(mapSegments(orbit.map(\.coordinate)).count == 2)
+        assert(issPosition(orbit, at: now) != issPosition(orbit, at: now.addingTimeInterval(180)))
+        let stationJSON = Data(#"[{"latitude":10,"longitude":20,"timestamp":1000},{"latitude":20,"longitude":30,"timestamp":1300}]"#.utf8)
+        let stationPoints = try parseISS(stationJSON)
+        assert(stationPoints.count == 2)
+        let preferences = UserDefaults(suiteName: "WorldWatchTests-" + UUID().uuidString)!
+        preferences.set(false, forKey: "mapHotspots")
+        assert(!WorldPreferences.enabled("mapConflicts", in: preferences))
+        preferences.set(true, forKey: "mapConflicts")
+        assert(WorldPreferences.enabled("mapConflicts", in: preferences))
+        preferences.removeObject(forKey: "mapConflicts"); preferences.removeObject(forKey: "mapHotspots")
+        var crowded: [MapLabel] = []
+        let tiny = MapProjection(bounds: MapRegion.world.bounds, size: CGSize(width: 160, height: 80))
+        placeMapLabel([String(repeating: "Long city ", count: 10), "03:12 · 8°"], id: "city", at: CGPoint(x: 80, y: 40), projection: tiny, labels: &crowded)
+        assert(crowded.first?.text == "03:12 · 8°")
+        let combined = mapLabels(projection: tiny, reserved: crowded)
+        for a in combined.indices { for b in combined.indices where a < b { assert(!combined[a].rect.intersects(combined[b].rect)) } }
+        let layerStore = MapLayerStore(root: temporary.appendingPathComponent("MapLayers"))
+        try layerStore.write(.init(checkedAt: now, fetchedAt: now.addingTimeInterval(-86401), value: [track]), name: "cyclones")
+        assert(layerStore.cyclones(at: now).isEmpty)
+        try FileManager.default.removeItem(at: temporary)
+        print("PASS: 2.7 地震时限与震级标签、GDACS类型和结束时间、台风过滤/名称/乱序历史预测/60点上限、冲突评分/48小时/四级/15国/词边界、夏令时、天气数组及过期、ISS插值及经线断线、偏好迁移与过期缓存")
         if let index = CommandLine.arguments.firstIndex(of: "--fixtures"), CommandLine.arguments.count > index + 1 {
             let directory = CommandLine.arguments[index + 1]
             for (id, file) in [("bbc", "BBCWorld"), ("bbc-zh", "BBCChinese"), ("guardian", "Guardian"), ("usgs", "USGS")] {

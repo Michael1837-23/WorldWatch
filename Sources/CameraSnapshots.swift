@@ -25,6 +25,11 @@ struct CameraCity: Identifiable, Sendable {
     var englishName: String {
         ["beijing": "Beijing", "shanghai": "Shanghai", "hongkong": "Hong Kong", "chongqing": "Chongqing", "tokyo": "Tokyo", "taipei": "Taipei", "newyork": "New York", "losangeles": "Los Angeles", "paris": "Paris", "london": "London"][id] ?? name
     }
+    var timeZoneID: String {
+        ["beijing": "Asia/Shanghai", "shanghai": "Asia/Shanghai", "hongkong": "Asia/Hong_Kong", "chongqing": "Asia/Shanghai",
+         "tokyo": "Asia/Tokyo", "taipei": "Asia/Taipei", "newyork": "America/New_York", "losangeles": "America/Los_Angeles",
+         "paris": "Europe/Paris", "london": "Europe/London"][id] ?? "Etc/UTC"
+    }
     static let all: [CameraCity] = [
         .init(id: "beijing", name: "北京", keywords: ["beijing", "北京", "peking"], candidates: [.bilibiliRoom(3291055), .bilibiliSearch("北京 街景"), .bilibiliSearch("北京 实景"), .youtubeSearch("beijing city live camera")]),
         .init(id: "shanghai", name: "上海", keywords: ["shanghai", "上海"], candidates: [.youtubeSearch("shanghai bund live camera"), .youtubeSearch("Shanghai Bund live"), .bilibiliSearch("上海 街景")]),
