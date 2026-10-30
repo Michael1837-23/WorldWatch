@@ -12,14 +12,14 @@ struct WorldWatchProvider: TimelineProvider {
     func getSnapshot(in context: Context, completion: @escaping (WorldWatchEntry) -> Void) {
         var snapshot = cached() ?? placeholder(in: context)
         snapshot.displayMode = NewsDisplayMode.selected
-        completion(widgetTimeline(snapshot, pageSize: pageSize(context.family)).first ?? snapshot)
+        completion(widgetTimeline(snapshot, pageSize: pageSize(context.family), filter: NewsFilter.selected).first ?? snapshot)
     }
     func getTimeline(in context: Context, completion: @escaping (Timeline<WorldWatchEntry>) -> Void) {
         Task {
             var entry = await load()
             entry.displayMode = NewsDisplayMode.selected
             let delay: TimeInterval = entry.availableSources == 0 ? 5 * 60 : 15 * 60
-            completion(Timeline(entries: widgetTimeline(entry, pageSize: pageSize(context.family)), policy: .after(Date().addingTimeInterval(delay))))
+            completion(Timeline(entries: widgetTimeline(entry, pageSize: pageSize(context.family), filter: NewsFilter.selected), policy: .after(Date().addingTimeInterval(delay))))
         }
     }
     /// Candidates per entry. The view shows as many as fit, so latest mode sends a few spares;
@@ -214,6 +214,7 @@ struct WorldWatchWidget: Widget {
 struct WorldComponentEntry: TimelineEntry {
     let date: Date
     let events: [WorldEvent]
+    let note: String?
     let markers: [MapMarker]
     let conflicts: [MapConflict]
     let cyclones: [MapCyclone]
@@ -261,19 +262,20 @@ struct WorldComponentProvider: TimelineProvider {
     /// WidgetKit rejects timeline archives that are too large (each entry archives its images and map),
     /// so entries are spaced three minutes apart: ten entries cover the 30-minute refresh window.
     static let entrySpacing: TimeInterval = 180
-    func entries(snapshot: NewsSnapshot?, now: Date = Date(), minutes: Int = 30) -> [WorldComponentEntry] {
+    func entries(snapshot: NewsSnapshot?, now: Date = Date(), minutes: Int = 30, filter: NewsFilter = NewsFilter.selected) -> [WorldComponentEntry] {
         let all = snapshot?.sourceFeeds?.values.flatMap(\.events) ?? snapshot?.rotationEvents ?? snapshot?.events ?? []
         let retained = mergedEvents(all, now: now)
         let layers = MapLayerStore.shared
         let station = layers.station(), weather = cameras ? layers.weather() : []
-        let mode = NewsDisplayMode.selected, pool = displayPool(retained, mode: mode, now: now)
+        let mode = NewsDisplayMode.selected
+        let pool = displayPool(all, mode: mode, now: now, filter: filter)
         let cities = CameraCity.selected, settings = MapSettings()
         let frames = Dictionary(uniqueKeysWithValues: cities.map { ($0.id, CameraSnapshotStore.shared.read($0.id)?.frames.filter(CameraOptions.allows) ?? []) })
         let spacing = Self.entrySpacing, slot = floor(now.timeIntervalSince1970 / spacing) * spacing
         return (0..<min(10, max(1, Int(Double(minutes * 60) / spacing)))).map { index in
             let date = index == 0 ? now : Date(timeIntervalSince1970: slot + Double(index) * spacing)
             let news = mode == .latest ? Array(pool.prefix(12)) : rotationEvents(pool, at: date, limit: 10).events
-            return WorldComponentEntry(date: date, events: news, markers: mapMarkers(all, now: date), conflicts: mapConflicts(retained, now: date),
+            return WorldComponentEntry(date: date, events: news, note: filter.mode == .personal && news.isEmpty ? "没有符合个性设置的新闻" : nil, markers: mapMarkers(all, now: date), conflicts: mapConflicts(retained, now: date),
                                        cyclones: layers.cyclones(at: date), weather: weather, station: station, sun: solarPosition(at: date),
                                        settings: settings, cities: cities, frames: frames, index: Int(date.timeIntervalSince1970 / spacing))
         }
@@ -304,10 +306,14 @@ struct WorldComponentView: View {
                             CameraGrid(cities: entry.cities, frames: entry.frames, index: entry.index, maxPixel: 360, store: cameraStore)
                         }
                         .frame(width: max(0, (geometry.size.width - 16) * 0.52))
-                        FillingStack(spacing: 9) {
-                            ForEach(entry.events) { event in WidgetRow(event: event, family: .systemLarge) }
+                        if let note = entry.note {
+                            Text(note).font(.caption).foregroundStyle(.secondary).frame(maxWidth: .infinity, maxHeight: .infinity)
+                        } else {
+                            FillingStack(spacing: 9) {
+                                ForEach(entry.events) { event in WidgetRow(event: event, family: .systemLarge) }
+                            }
+                            .clipped()
                         }
-                        .clipped()
                     }
                 }
             }
@@ -352,7 +358,7 @@ struct WorldLiveWidget: Widget {
 
 @main struct WorldWatchWidgets: WidgetBundle {
     init() {
-        NSLog("世界动态组件目录 2.7/16：WorldWatchNews、WorldWatchDashboard、WorldWatchMap、WorldWatchLive")
+        NSLog("世界动态组件目录 2.8/17：WorldWatchNews、WorldWatchDashboard、WorldWatchMap、WorldWatchLive")
     }
     var body: some Widget {
         WorldWatchWidget()

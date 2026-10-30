@@ -84,6 +84,96 @@ struct WorldEvent: Identifiable, Codable, Sendable {
     }
 }
 
+enum NewsFilterMode: String, Codable, CaseIterable, Sendable {
+    case all, personal
+    var title: String { self == .all ? "全部新闻" : "个性新闻" }
+}
+
+func normalizedKeyword(_ value: String) -> String {
+    let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+    return (trimmed.applyingTransform(StringTransform("Traditional-Simplified"), reverse: false) ?? trimmed).lowercased()
+}
+
+func cleanedKeywords(_ words: [String]) -> [String] {
+    var seen = Set<String>()
+    return words.compactMap { word in
+        let trimmed = word.trimmingCharacters(in: .whitespacesAndNewlines)
+        let key = normalizedKeyword(trimmed)
+        return !key.isEmpty && seen.insert(key).inserted ? trimmed : nil
+    }.prefix(50).map { $0 }
+}
+
+struct NewsFilter: Codable, Equatable, Sendable {
+    var mode: NewsFilterMode = .all
+    var excludedCategories: Set<String> = []
+    var excludedSources: Set<String> = []
+    var followed: [String] = []
+    var blocked: [String] = []
+    var followOnly = false
+
+    var cleaned: NewsFilter {
+        var copy = self
+        copy.followed = cleanedKeywords(followed)
+        copy.blocked = cleanedKeywords(blocked)
+        return copy
+    }
+    static func read(from defaults: UserDefaults) -> NewsFilter {
+        guard let data = defaults.data(forKey: "newsFilter"), let filter = try? JSONDecoder().decode(NewsFilter.self, from: data) else { return NewsFilter() }
+        return filter.cleaned
+    }
+    static var selected: NewsFilter {
+        get { read(from: WorldPreferences.shared) }
+        set { if let data = try? JSONEncoder().encode(newValue.cleaned) { WorldPreferences.shared.set(data, forKey: "newsFilter") } }
+    }
+}
+
+private struct KeywordMatcher {
+    let substrings: [String]
+    let expressions: [NSRegularExpression]
+    init(_ words: [String]) {
+        let normalized = cleanedKeywords(words).map(normalizedKeyword)
+        substrings = normalized.filter { !$0.unicodeScalars.allSatisfy(\.isASCII) }
+        expressions = normalized.filter { $0.unicodeScalars.allSatisfy(\.isASCII) }.compactMap { word in
+            try? NSRegularExpression(pattern: "(?<![A-Za-z0-9_])" + NSRegularExpression.escapedPattern(for: word) + "(?![A-Za-z0-9_])")
+        }
+    }
+    var isEmpty: Bool { substrings.isEmpty && expressions.isEmpty }
+    func matches(_ text: String) -> Bool {
+        if substrings.contains(where: text.contains) { return true }
+        let range = NSRange(text.startIndex..., in: text)
+        return expressions.contains { $0.firstMatch(in: text, range: range) != nil }
+    }
+}
+
+private struct NewsFilterMatcher {
+    let filter: NewsFilter
+    let followed: KeywordMatcher
+    let blocked: KeywordMatcher
+    init(_ filter: NewsFilter) {
+        self.filter = filter
+        followed = KeywordMatcher(filter.followed)
+        blocked = KeywordMatcher(filter.blocked)
+    }
+    func allows(_ event: WorldEvent) -> Bool {
+        guard filter.mode == .personal else { return true }
+        let titles = followed.isEmpty && blocked.isEmpty ? [] : [event.title, event.translatedTitle].compactMap { $0 }.map(normalizedKeyword)
+        if titles.contains(where: blocked.matches) { return false }
+        let matchesFollowed = titles.contains(where: followed.matches)
+        if filter.followOnly { return matchesFollowed }
+        return matchesFollowed || (!filter.excludedCategories.contains(event.category.rawValue) && !filter.excludedSources.contains(event.sourceID))
+    }
+}
+
+func newsFilterAllows(_ event: WorldEvent, filter: NewsFilter) -> Bool {
+    NewsFilterMatcher(filter).allows(event)
+}
+
+func applyNewsFilter(_ events: [WorldEvent], filter: NewsFilter) -> [WorldEvent] {
+    guard filter.mode == .personal else { return events }
+    let matcher = NewsFilterMatcher(filter)
+    return events.filter(matcher.allows)
+}
+
 struct SourceSnapshot: Codable, Sendable {
     var events: [WorldEvent]
     var fetchedAt: Date
@@ -200,16 +290,16 @@ func balancedByOrigin(_ events: [WorldEvent], ratio: Double?) -> [WorldEvent] {
     return result + deferred
 }
 
-func latestEvents(_ events: [WorldEvent], limit: Int = 64, now: Date = Date(), domesticRatio: Double? = DomesticShare.selected.ratio) -> [WorldEvent] {
-    Array(balancedByOrigin(uniqueNewsEvents(events, mergeTopics: false, now: now), ratio: domesticRatio).prefix(limit))
+func latestEvents(_ events: [WorldEvent], limit: Int = 64, now: Date = Date(), domesticRatio: Double? = DomesticShare.selected.ratio, filter: NewsFilter = NewsFilter()) -> [WorldEvent] {
+    Array(balancedByOrigin(uniqueNewsEvents(applyNewsFilter(events, filter: filter), mergeTopics: false, now: now), ratio: domesticRatio).prefix(limit))
 }
 
-func displayPool(_ events: [WorldEvent], mode: NewsDisplayMode, now: Date = Date()) -> [WorldEvent] {
-    mode == .latest ? latestEvents(events, now: now) : digestPool(events, now: now)
+func displayPool(_ events: [WorldEvent], mode: NewsDisplayMode, now: Date = Date(), filter: NewsFilter = NewsFilter()) -> [WorldEvent] {
+    mode == .latest ? latestEvents(events, now: now, filter: filter) : digestPool(events, now: now, filter: filter)
 }
 
-func digestPool(_ events: [WorldEvent], perCategory: Int = 8, now: Date = Date()) -> [WorldEvent] {
-    let unique = uniqueNewsEvents(events, perCategory: perCategory, now: now)
+func digestPool(_ events: [WorldEvent], perCategory: Int = 8, now: Date = Date(), filter: NewsFilter = NewsFilter()) -> [WorldEvent] {
+    let unique = uniqueNewsEvents(applyNewsFilter(events, filter: filter), perCategory: perCategory, now: now)
     let grouped = Dictionary(grouping: unique, by: \.category)
     let order: [NewsCategory] = [.domestic, .world, .finance, .technology, .entertainment, .politics, .sports, .disaster]
     var result: [WorldEvent] = []
@@ -251,17 +341,19 @@ func rotationTimeline(_ snapshot: NewsSnapshot, now: Date = Date(), minutes: Int
     }
 }
 
-func widgetTimeline(_ snapshot: NewsSnapshot, now: Date = Date(), pageSize: Int = 4) -> [NewsSnapshot] {
+func widgetTimeline(_ snapshot: NewsSnapshot, now: Date = Date(), pageSize: Int = 4, filter: NewsFilter = NewsFilter()) -> [NewsSnapshot] {
     let all = snapshot.sourceFeeds?.values.flatMap(\.events) ?? snapshot.rotationEvents ?? snapshot.events
     if snapshot.mode == .rotation {
         var rotating = snapshot
-        rotating.rotationEvents = digestPool(all, now: now)
+        rotating.rotationEvents = digestPool(all, now: now, filter: filter)
+        if filter.mode == .personal && rotating.rotationEvents?.isEmpty == true { rotating.note = "没有符合个性设置的新闻" }
         return rotationTimeline(rotating, now: now, pageSize: pageSize)
     }
     var entry = snapshot
     entry.checkedAt = snapshot.checkDate
     entry.date = now
-    entry.events = latestEvents(all, limit: pageSize, now: now)
+    entry.events = latestEvents(all, limit: pageSize, now: now, filter: filter)
+    if filter.mode == .personal && entry.events.isEmpty { entry.note = "没有符合个性设置的新闻" }
     entry.rotationEvents = nil
     entry.rotationPage = nil; entry.rotationPageCount = nil
     entry.sourceFeeds = snapshot.sourceFeeds?.mapValues { SourceSnapshot(events: [], fetchedAt: $0.fetchedAt) }
@@ -500,7 +592,7 @@ func fetchSource(_ source: NewsSource, timeout: Double = 25) async throws -> [Wo
     var request = URLRequest(url: source.url)
     request.timeoutInterval = timeout
     request.cachePolicy = .reloadIgnoringLocalCacheData
-    request.setValue("WorldWatch/2.7 (personal desktop news reader)", forHTTPHeaderField: "User-Agent")
+    request.setValue("WorldWatch/2.8 (personal desktop news reader)", forHTTPHeaderField: "User-Agent")
     for attempt in 0..<2 {
         do {
             let (data, response) = try await newsSession.data(for: request)

@@ -129,6 +129,77 @@ import UniformTypeIdentifiers
         func headline(_ id: String, _ title: String, _ sourceID: String, _ secondsAgo: Double) -> WorldEvent {
             WorldEvent(id: id, sourceID: sourceID, title: title, url: URL(string: "https://example.org/" + id)!, date: now.addingTimeInterval(-secondsAgo), timeKind: "发布", disaster: false, severity: nil)
         }
+        let tech = headline("filter-tech", "AI chip launch", "techcrunch", 2)
+        let finance = headline("filter-finance", "Markets rally as AI chips rise", "cnbc", 3)
+        let bbc = headline("filter-bbc", "AI chip launch", "bbc", 1)
+        let technologyOnly = Set(NewsCategory.allCases.map(\.rawValue)).subtracting([NewsCategory.technology.rawValue])
+        var custom = NewsFilter(mode: .personal, excludedCategories: technologyOnly)
+        assert(applyNewsFilter([tech, finance, bbc], filter: NewsFilter()).count == 3)
+        assert(newsFilterAllows(tech, filter: custom) && !newsFilterAllows(finance, filter: custom))
+        custom.excludedSources.insert("techcrunch")
+        assert(!newsFilterAllows(tech, filter: custom))
+        var noBBC = NewsFilter(mode: .personal); noBBC.excludedSources.insert("bbc")
+        assert(!newsFilterAllows(bbc, filter: noBBC) && newsFilterAllows(tech, filter: noBBC))
+        assert(newsFilterAllows(headline("new-source", "Fresh product", "future-source", 1), filter: NewsFilter(mode: .personal)), "未知新来源默认选择")
+        custom.followed = [" ai "]
+        assert(newsFilterAllows(finance, filter: custom) && newsFilterAllows(tech, filter: custom), "关注词覆盖领域和来源")
+        assert(!newsFilterAllows(headline("said", "She said hello", "bbc", 1), filter: custom))
+        custom.followOnly = true
+        assert(!newsFilterAllows(headline("not-followed", "Apple launches Mac", "techcrunch", 1), filter: custom))
+        assert(newsFilterAllows(headline("capitals", "AI CHIP news", "bbc", 1), filter: custom))
+        custom.blocked = ["AI"]
+        assert(!newsFilterAllows(tech, filter: custom) && newsFilterAllows(finance, filter: custom) == false, "屏蔽词优先")
+        custom.followed = ["US"]; custom.blocked = []
+        assert(!newsFilterAllows(headline("virus", "virus spreads", "bbc", 1), filter: custom))
+        assert(newsFilterAllows(headline("us-news", "US officials report", "bbc", 1), filter: custom))
+        custom.followed = ["苹果"]
+        var translatedApple = headline("apple", "Apple releases MacBook", "bbc", 1)
+        translatedApple.translatedTitle = "蘋果发布新款 MacBook"
+        assert(newsFilterAllows(translatedApple, filter: custom))
+        custom.followed = ["蘋果"]
+        translatedApple.translatedTitle = "苹果发布新款 MacBook"
+        assert(newsFilterAllows(translatedApple, filter: custom))
+        assert(cleanedKeywords([" AI ", "ai", "蘋果", "苹果", "  "]).count == 2)
+        assert(cleanedKeywords((0..<60).map { "word\($0)" }).count == 50)
+        let encodedFilter = try JSONEncoder().encode(custom.cleaned)
+        let decodedFilter = try JSONDecoder().decode(NewsFilter.self, from: encodedFilter)
+        assert(decodedFilter == custom.cleaned)
+        let suiteName = "WorldWatch-filter-tests-" + UUID().uuidString
+        let defaults = UserDefaults(suiteName: suiteName)!
+        assert(NewsFilter.read(from: defaults) == NewsFilter())
+        defaults.set(encodedFilter, forKey: "newsFilter")
+        assert(NewsFilter.read(from: defaults) == custom.cleaned)
+        defaults.removePersistentDomain(forName: suiteName)
+        var orderedFilter = NewsFilter(mode: .personal, excludedCategories: technologyOnly)
+        let beforeDedup = latestEvents([bbc, tech, finance], now: now, domesticRatio: nil, filter: orderedFilter)
+        assert(beforeDedup.map(\.id) == [tech.id], "先过滤才能保留同标题的科技报道")
+        orderedFilter.followed = ["AI"]
+        let personalLatest = latestEvents([bbc, tech, finance], now: now, domesticRatio: 1.0 / 3, filter: orderedFilter)
+        assert(personalLatest.allSatisfy { newsFilterAllows($0, filter: orderedFilter) })
+        let domestic = headline("filter-domestic", "国内 AI 政策", "cns-china", 0)
+        let mixedFiltered = latestEvents([domestic, bbc, finance], now: now, domesticRatio: 1.0 / 3, filter: orderedFilter)
+        assert(mixedFiltered.allSatisfy { newsFilterAllows($0, filter: orderedFilter) })
+        let d0 = headline("d0", "国内公共服务方案", "cns-china", 0)
+        let d1 = headline("d1", "国内农业生产进展", "cns-society", 1)
+        let f0 = headline("f0", "Market prices rise", "cnbc", 2)
+        let f1 = headline("f1", "Companies announce earnings", "cnbc", 3)
+        let abroad = headline("abroad", "World science report", "bbc", 4)
+        var noFinance = NewsFilter(mode: .personal); noFinance.excludedCategories.insert(NewsCategory.finance.rawValue)
+        assert(latestEvents([d0, d1, f0, f1, abroad], now: now, domesticRatio: 1.0 / 3, filter: noFinance).map(\.id) == ["d0", "abroad", "d1"], "过滤后再按国内占比排序")
+        let snapshot = NewsSnapshot(date: now, events: [bbc, tech, finance], availableSources: 1, note: nil,
+                                    sourceFeeds: ["fixture": SourceSnapshot(events: [bbc, tech, finance], fetchedAt: now)])
+        let personalEntries = widgetTimeline(snapshot, now: now, filter: orderedFilter)
+        assert(personalEntries.count == 1 && personalEntries[0].events.allSatisfy { newsFilterAllows($0, filter: orderedFilter) })
+        var none = orderedFilter; none.followOnly = true; none.followed = []
+        assert(widgetTimeline(snapshot, now: now, filter: none)[0].note == "没有符合个性设置的新闻")
+        var rotatingSnapshot = snapshot; rotatingSnapshot.displayMode = .rotation
+        let filteredRotation = widgetTimeline(rotatingSnapshot, now: now, filter: none)
+        assert(filteredRotation.count == 60 && filteredRotation.allSatisfy { $0.events.isEmpty && $0.note == "没有符合个性设置的新闻" })
+        let conflictEvents = [headline("conflict-filter", "Iran missile attack", "bbc", 1)]
+        let conflictsBefore = mapConflicts(conflictEvents, now: now)
+        _ = applyNewsFilter(conflictEvents, filter: none)
+        assert(!conflictsBefore.isEmpty && mapConflicts(conflictEvents, now: now) == conflictsBefore, "地图仍使用原始新闻")
+        print("PASS: 个性新闻领域/来源、关注与屏蔽优先级、中英/简繁/大小写/单词边界、关键词去重上限、JSON与默认、先过滤后去重和国内占比、组件空态及地图不受影响")
         let election1 = headline("israel-new", "Israel goes to polls in pivotal election", "bbc", 10)
         let election2 = headline("israel-old", "Turnout rises as Israelis vote in election", "guardian", 20)
         let other = headline("policy", "UK officials discuss treaty at summit", "guardian", 30)

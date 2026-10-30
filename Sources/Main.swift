@@ -15,6 +15,7 @@ struct CachedFeed: Codable {
     @Published var refreshing = false
     @Published var filter = "最新"
     @Published var widgetDisplayMode = NewsDisplayMode.selected
+    @Published var newsFilter = NewsFilter.selected
     @Published var rotationDate = Date()
     @Published var showSources = false
     @Published var cameraCities = CameraCity.selected.map(\.id)
@@ -132,6 +133,11 @@ struct CachedFeed: Codable {
     func setDomesticShare(_ share: DomesticShare) {
         DomesticShare.selected = share
         objectWillChange.send()
+        publishWidgetSnapshot(forceReload: true)
+    }
+    func setNewsFilter(_ value: NewsFilter) {
+        newsFilter = value.cleaned
+        NewsFilter.selected = newsFilter
         publishWidgetSnapshot(forceReload: true)
     }
     func setWidgetDisplayMode(_ mode: NewsDisplayMode) {
@@ -321,18 +327,20 @@ struct WorldView: View {
     @State private var showCameras = false
     static let scopes = ["综合", "最新", "国内", "国际", "政治", "财经", "科技", "文娱", "体育", "灾害"]
     var rows: [WorldEvent] {
+        let raw = store.enabledSources.flatMap { store.feeds[$0.id]?.events ?? [] }
+        let personal = store.newsFilter.mode == .personal
+        let events = personal ? uniqueNewsEvents(applyNewsFilter(raw, filter: store.newsFilter), mergeTopics: false, now: store.rotationDate) : store.events
         if store.filter == "综合" {
-            let pool = digestPool(store.events, now: store.rotationDate)
+            let pool = digestPool(raw, now: store.rotationDate, filter: store.newsFilter)
             let page = rotationEvents(pool, at: store.rotationDate).events
             let ids = Set(page.map(\.id))
             return page + pool.filter { !ids.contains($0.id) }
         }
-        if store.filter == "最新" { return balancedByOrigin(store.events, ratio: DomesticShare.selected.ratio) }
-        return store.events.filter { event in
+        if store.filter == "最新" { return balancedByOrigin(events, ratio: DomesticShare.selected.ratio) }
+        return events.filter { event in
             switch store.filter {
             case "国内": return event.isDomestic
             case "国际": return !event.isDomestic && !event.disaster
-            case "最新": return true
             default: return event.category.rawValue == store.filter
             }
         }
@@ -381,16 +389,25 @@ struct WorldView: View {
                 TimelineView(.periodic(from: .now, by: 30)) { context in
                     HStack(spacing: 5) {
                         if needsAttention(now: context.date) { Circle().fill(Color.orange).frame(width: 6, height: 6) }
-                        Text(statusText)
+                        Text(statusText + (store.newsFilter.mode == .personal ? " · 个性新闻" : ""))
                     }
                 }
                 .font(.system(size: 12)).foregroundStyle(.secondary).lineLimit(1)
                 Spacer(minLength: 8)
                 Menu {
+                    Section("新闻过滤") {
+                        Picker("新闻过滤", selection: Binding(get: { store.newsFilter.mode }, set: { mode in
+                            var value = store.newsFilter; value.mode = mode; store.setNewsFilter(value)
+                        })) {
+                            ForEach(NewsFilterMode.allCases, id: \.self) { Text($0.title).tag($0) }
+                        }.pickerStyle(.inline)
+                    }
+                    Section("范围") {
                     Picker("范围", selection: $store.filter) {
                         ForEach(Self.scopes, id: \.self) { Text($0).tag($0) }
                     }
                     .pickerStyle(.inline).labelsHidden()
+                    }
                 } label: {
                     Text("\(store.filter) · \(rows.count) 条").font(.system(size: 12, weight: .medium))
                 }
@@ -421,14 +438,16 @@ struct WorldView: View {
             }
         } else if rows.isEmpty {
             ContentUnavailableView {
-                if store.refreshing { Label("正在获取新闻", systemImage: "antenna.radiowaves.left.and.right") }
+                if store.newsFilter.mode == .personal { Label("没有符合条件的新闻", systemImage: "line.3.horizontal.decrease.circle") }
+                else if store.refreshing { Label("正在获取新闻", systemImage: "antenna.radiowaves.left.and.right") }
                 else if store.enabledSources.isEmpty { Label("尚未选择来源", systemImage: "newspaper") }
                 else if store.healthyCount == 0 { Label("暂时无法连接", systemImage: "wifi.exclamationmark") }
                 else { Label("暂无报道", systemImage: "globe.asia.australia") }
             } description: {
-                Text(store.enabledSources.isEmpty ? "在设置中启用至少一个来源。" : store.healthyCount == 0 && !store.refreshing ? "请检查网络后重试。" : "新闻保留三天，灾害保留七天。")
+                Text(store.newsFilter.mode == .personal ? "请调整新闻过滤设置。" : store.enabledSources.isEmpty ? "在设置中启用至少一个来源。" : store.healthyCount == 0 && !store.refreshing ? "请检查网络后重试。" : "新闻保留三天，灾害保留七天。")
             } actions: {
-                if store.enabledSources.isEmpty { Button("打开设置") { store.showSources = true } }
+                if store.newsFilter.mode == .personal { Button("调整过滤") { store.showSources = true } }
+                else if store.enabledSources.isEmpty { Button("打开设置") { store.showSources = true } }
                 else if !store.refreshing { Button("重新连接") { Task { await store.refresh() } } }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -459,6 +478,135 @@ struct WorldView: View {
     }
 }
 
+struct KeywordFlow: Layout {
+    var spacing: CGFloat = 6
+    func positions(_ subviews: Subviews, width: CGFloat) -> (points: [CGPoint], height: CGFloat) {
+        var points: [CGPoint] = [], x: CGFloat = 0, y: CGFloat = 0, rowHeight: CGFloat = 0
+        for subview in subviews {
+            let size = subview.sizeThatFits(.unspecified)
+            if x > 0 && x + size.width > width { x = 0; y += rowHeight + spacing; rowHeight = 0 }
+            points.append(CGPoint(x: x, y: y))
+            x += size.width + spacing; rowHeight = max(rowHeight, size.height)
+        }
+        return (points, y + rowHeight)
+    }
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let width = proposal.width ?? 300
+        return CGSize(width: width, height: positions(subviews, width: width).height)
+    }
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        let points = positions(subviews, width: bounds.width).points
+        for (index, subview) in subviews.enumerated() {
+            subview.place(at: CGPoint(x: bounds.minX + points[index].x, y: bounds.minY + points[index].y), proposal: .unspecified)
+        }
+    }
+}
+
+struct NewsFilterSection: View {
+    @ObservedObject var store: EventStore
+    @State private var followedInput = ""
+    @State private var blockedInput = ""
+    private var enabledIDs: Set<String> { Set(NewsSource.all.map(\.id)).subtracting(store.disabled) }
+    private var selectedCount: Int { enabledIDs.subtracting(store.newsFilter.excludedSources).count }
+    private func update(_ change: (inout NewsFilter) -> Void) {
+        var value = store.newsFilter
+        change(&value)
+        store.setNewsFilter(value)
+    }
+    private func addKeyword(_ followed: Bool) {
+        let input = followed ? followedInput : blockedInput
+        let word = input.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !word.isEmpty else { return }
+        let current = followed ? store.newsFilter.followed : store.newsFilter.blocked
+        guard current.count < 50 else { return }
+        update { filter in
+            if followed { filter.followed.append(word) } else { filter.blocked.append(word) }
+        }
+        if followed { followedInput = "" } else { blockedInput = "" }
+    }
+    private func keywordEditor(_ title: String, followed: Bool) -> some View {
+        let words = followed ? store.newsFilter.followed : store.newsFilter.blocked
+        let input = followed ? $followedInput : $blockedInput
+        return VStack(alignment: .leading, spacing: 7) {
+            Text(title).fontWeight(.medium)
+            HStack(spacing: 8) {
+                TextField("输入关键词", text: input).textFieldStyle(.roundedBorder).onSubmit { addKeyword(followed) }
+                    .accessibilityLabel(title)
+                Button("添加") { addKeyword(followed) }
+                    .disabled(words.count >= 50 || input.wrappedValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    .accessibilityLabel("添加\(title)")
+            }
+            if !words.isEmpty {
+                KeywordFlow {
+                    ForEach(words, id: \.self) { word in
+                        Button {
+                            update { filter in
+                                if followed { filter.followed.removeAll { $0 == word } } else { filter.blocked.removeAll { $0 == word } }
+                            }
+                        } label: {
+                            HStack(spacing: 5) {
+                                Text(word).lineLimit(1).truncationMode(.tail).frame(maxWidth: 270)
+                                Image(systemName: "xmark").font(.system(size: 9, weight: .semibold))
+                            }
+                            .font(.system(size: 11)).padding(.horizontal, 8).padding(.vertical, 4)
+                            .background(Color.primary.opacity(0.08), in: Capsule())
+                        }
+                        .buttonStyle(.plain).help("删除\(word)").accessibilityLabel("删除\(title)：\(word)")
+                    }
+                }
+            }
+            Text("最多 50 个").font(.caption).foregroundStyle(.secondary)
+        }
+    }
+    var body: some View {
+        Section {
+            Picker("新闻过滤", selection: Binding(get: { store.newsFilter.mode }, set: { mode in update { $0.mode = mode } })) {
+                ForEach(NewsFilterMode.allCases, id: \.self) { Text($0.title).tag($0) }
+            }
+            .pickerStyle(.segmented)
+            if store.newsFilter.mode == .personal {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("领域").fontWeight(.medium)
+                    LazyVGrid(columns: [GridItem(.flexible(), alignment: .leading), GridItem(.flexible(), alignment: .leading)], alignment: .leading, spacing: 8) {
+                        ForEach(NewsCategory.allCases, id: \.rawValue) { category in
+                            Toggle(category.rawValue, isOn: Binding(get: { !store.newsFilter.excludedCategories.contains(category.rawValue) }, set: { on in
+                                update { filter in
+                                    if on { filter.excludedCategories.remove(category.rawValue) } else { filter.excludedCategories.insert(category.rawValue) }
+                                }
+                            }))
+                        }
+                    }
+                }
+                DisclosureGroup("来源（已选 \(selectedCount)/\(NewsSource.all.count)）") {
+                    HStack {
+                        Button("全选") { update { $0.excludedSources.subtract(enabledIDs) } }
+                        Button("全不选") { update { $0.excludedSources.formUnion(enabledIDs) } }
+                    }.padding(.vertical, 4)
+                    ForEach(NewsSource.all) { source in
+                        Toggle(isOn: Binding(get: { !store.newsFilter.excludedSources.contains(source.id) && !store.disabled.contains(source.id) }, set: { on in
+                            update { filter in
+                                if on { filter.excludedSources.remove(source.id) } else { filter.excludedSources.insert(source.id) }
+                            }
+                        })) {
+                            HStack {
+                                Text(source.name)
+                                if store.disabled.contains(source.id) { Text("已停止抓取").font(.caption).foregroundStyle(.secondary) }
+                            }
+                        }
+                        .disabled(store.disabled.contains(source.id))
+                    }
+                }
+                keywordEditor("关注关键词", followed: true)
+                Toggle("只看含关注关键词的新闻", isOn: Binding(get: { store.newsFilter.followOnly }, set: { on in update { $0.followOnly = on } }))
+                keywordEditor("屏蔽关键词", followed: false)
+            }
+        } header: { Text("新闻过滤") } footer: {
+            Text("关注关键词会让对应新闻始终显示；屏蔽关键词优先级最高。过滤只影响新闻列表和新闻组件，不影响地图。")
+                .foregroundStyle(.secondary)
+        }
+    }
+}
+
 struct SettingsView: View {
     @ObservedObject var store: EventStore
     var body: some View {
@@ -477,6 +625,7 @@ struct SettingsView: View {
                          + "北京时间白天国内发稿集中，「均衡」时国内新闻约占三分之一、「少」约占五分之一，超出的顺延到后面，不会丢弃；同时作用于应用里的「最新」列表。")
                         .foregroundStyle(.secondary)
                 }
+                NewsFilterSection(store: store)
                 Section("更新") {
                     Picker("检查间隔", selection: Binding(get: { store.interval }, set: { store.setInterval($0) })) {
                         Text("1 分钟").tag(60.0); Text("3 分钟").tag(180.0); Text("5 分钟").tag(300.0)
@@ -545,7 +694,7 @@ struct SettingsView: View {
                         }
                     }
                 } header: { Text("来源") } footer: {
-                    Text("新闻保留三天，灾害保留七天。小组件的实际刷新时刻由 macOS 决定。").foregroundStyle(.secondary)
+                    Text("新闻保留三天，灾害保留七天。小组件的实际刷新时刻由 macOS 决定。停止抓取会同时影响地图；只想不显示某个来源请用「新闻过滤」。").foregroundStyle(.secondary)
                 }
             }
             .formStyle(.grouped)
