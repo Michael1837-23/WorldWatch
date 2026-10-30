@@ -1,4 +1,5 @@
 import Foundation
+import Darwin
 
 enum NewsCategory: String, CaseIterable, Sendable {
     case domestic = "国内", world = "国际", politics = "政治", finance = "财经"
@@ -206,13 +207,16 @@ struct NewsSnapshot: Codable, Sendable {
     var rotationPage: Int? = nil
     var rotationPageCount: Int? = nil
     var displayMode: NewsDisplayMode? = nil
+    var updatedAt: Date? = nil
     var mode: NewsDisplayMode { displayMode ?? .latest }
     var checkDate: Date { checkedAt ?? date }
+    var revisionDate: Date { max(checkDate, updatedAt ?? checkDate) }
 }
 
 struct SourceFetchResult: Sendable {
     let id: String
     let events: [WorldEvent]?
+    var fetchedAt: Date? = nil
 }
 
 func digestTopic(_ event: WorldEvent) -> String? {
@@ -242,7 +246,8 @@ func headlineTokens(_ title: String) -> Set<String> {
 
 func uniqueNewsEvents(_ events: [WorldEvent], perCategory: Int? = nil, mergeTopics: Bool = true, now: Date = Date()) -> [WorldEvent] {
     var topics = Set<String>(), titles = Set<String>(), urls = Set<String>()
-    var fingerprints: [Set<String>] = []
+    var fingerprintSizes: [Int] = []
+    var tokenIndex: [String: [Int]] = [:]
     var categoryCounts: [NewsCategory: Int] = [:]
     return mergedEvents(events, now: now).filter { event in
         if let perCategory, categoryCounts[event.category, default: 0] >= perCategory { return false }
@@ -250,12 +255,25 @@ func uniqueNewsEvents(_ events: [WorldEvent], perCategory: Int? = nil, mergeTopi
         guard !titles.contains(normalized), !urls.contains(canonicalNewsURL(event.url)) else { return false }
         if mergeTopics, let topic = digestTopic(event), topics.contains(topic) { return false }
         let tokens = headlineTokens(event.title)
-        // ponytail: title similarity catches near duplicates, not cross-language semantic identity.
-        if tokens.count >= 4, fingerprints.contains(where: { other in
-            let common = tokens.intersection(other).count
-            return Double(common) / Double(max(1, tokens.union(other).count)) >= 0.65
-        }) { return false }
-        titles.insert(normalized); urls.insert(canonicalNewsURL(event.url)); fingerprints.append(tokens)
+        // ponytail: token index preserves the Jaccard rule; cross-language semantic duplicates may remain.
+        if tokens.count >= 4 {
+            var common: [Int: Int] = [:]
+            for token in tokens {
+                for index in tokenIndex[token] ?? [] {
+                    let size = fingerprintSizes[index]
+                    if Double(min(size, tokens.count)) / Double(max(size, tokens.count)) >= 0.65 {
+                        common[index, default: 0] += 1
+                    }
+                }
+            }
+            if common.contains(where: { index, count in
+                Double(count) / Double(max(1, tokens.count + fingerprintSizes[index] - count)) >= 0.65
+            }) { return false }
+        }
+        titles.insert(normalized); urls.insert(canonicalNewsURL(event.url))
+        let index = fingerprintSizes.count
+        fingerprintSizes.append(tokens.count)
+        for token in tokens { tokenIndex[token, default: []].append(index) }
         categoryCounts[event.category, default: 0] += 1
         if let topic = digestTopic(event) { topics.insert(topic) }
         return true
@@ -366,6 +384,30 @@ func sameDigest(_ first: [WorldEvent], _ second: [WorldEvent]) -> Bool {
     }
 }
 
+func sameRenderedNews(_ first: [WorldEvent], _ second: [WorldEvent]) -> Bool {
+    sameDigest(first, second) && first.map(\.displayTitle) == second.map(\.displayTitle)
+}
+
+func widgetNewsChanged(from previous: NewsSnapshot?, to snapshot: NewsSnapshot, filter: NewsFilter, now: Date = Date()) -> Bool {
+    guard let previous, previous.mode == snapshot.mode else { return true }
+    func candidates(_ entry: NewsSnapshot) -> [WorldEvent] {
+        let all = entry.sourceFeeds?.values.flatMap(\.events) ?? entry.rotationEvents ?? entry.events
+        let pool = displayPool(all, mode: entry.mode, now: now, filter: filter)
+        return entry.mode == .latest ? Array(pool.prefix(12)) : pool
+    }
+    return !sameRenderedNews(candidates(previous), candidates(snapshot))
+}
+
+func widgetReloadDelay(last: Date, now: Date, newsChanged: Bool) -> TimeInterval {
+    max(0, (newsChanged ? 15 : 55) - max(0, now.timeIntervalSince(last)))
+}
+
+func newerSnapshot(_ first: NewsSnapshot?, _ second: NewsSnapshot?) -> NewsSnapshot? {
+    guard let first else { return second }
+    guard let second else { return first }
+    return second.revisionDate >= first.revisionDate ? second : first
+}
+
 func refreshedSnapshot(previous: NewsSnapshot?, results: [SourceFetchResult], now: Date = Date(), enabledIDs: [String] = NewsSource.all.map(\.id), mode: NewsDisplayMode? = nil) -> NewsSnapshot {
     var feeds = (previous?.sourceFeeds ?? [:]).filter { enabledIDs.contains($0.key) }
     if feeds.isEmpty, let previous {
@@ -377,7 +419,10 @@ func refreshedSnapshot(previous: NewsSnapshot?, results: [SourceFetchResult], no
     for result in results {
         guard enabledIDs.contains(result.id) else { continue }
         if let events = result.events {
-            feeds[result.id] = SourceSnapshot(events: events, fetchedAt: now)
+            let fetched = result.fetchedAt ?? now
+            if feeds[result.id]?.fetchedAt ?? .distantPast <= fetched {
+                feeds[result.id] = SourceSnapshot(events: events, fetchedAt: fetched)
+            }
             successful += 1
         }
     }
@@ -408,8 +453,14 @@ struct NewsSnapshotStore {
         return try? JSONDecoder().decode(NewsSnapshot.self, from: data)
     }
     @discardableResult func write(_ snapshot: NewsSnapshot) throws -> Bool {
-        if let existing = read(), existing.checkDate > snapshot.checkDate { return false }
-        try FileManager.default.createDirectory(at: fileURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let directory = fileURL.deletingLastPathComponent()
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let descriptor = open(directory.appendingPathComponent(".snapshot.lock").path, O_CREAT | O_RDWR, S_IRUSR | S_IWUSR)
+        guard descriptor >= 0 else { throw CocoaError(.fileWriteUnknown) }
+        defer { close(descriptor) }
+        guard flock(descriptor, LOCK_EX) == 0 else { throw CocoaError(.fileWriteUnknown) }
+        defer { flock(descriptor, LOCK_UN) }
+        if let existing = read(), existing.revisionDate > snapshot.revisionDate { return false }
         try JSONEncoder().encode(snapshot).write(to: fileURL, options: .atomic)
         return true
     }

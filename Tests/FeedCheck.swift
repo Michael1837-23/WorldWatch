@@ -238,6 +238,19 @@ import UniformTypeIdentifiers
         let near1 = headline("near1", "OpenAI releases new AI model for coding tools", "bbc-tech", 1)
         let near2 = headline("near2", "OpenAI releases new AI model for coding tools today", "techcrunch", 2)
         assert(digestPool([near1, near2], now: now).count == 1, "跨来源近似标题去重")
+        let similarity = [
+            headline("sim1", "alpha beta gamma delta epsilon", "bbc", 1),
+            headline("sim2", "alpha beta gamma delta zeta", "guardian", 2),
+            headline("sim3", "alpha beta gamma theta iota", "bbc", 3),
+            headline("sim4", "alpha beta gamma delta epsilon eta zeta theta iota kappa", "bbc", 4),
+            headline("sim5", "red blue cat", "bbc", 5),
+            headline("sim6", "red blue cat dog", "guardian", 6)
+        ]
+        assert(uniqueNewsEvents(similarity, mergeTopics: false, now: now).map(\.id) == ["sim1", "sim3", "sim4", "sim5"], "保持原 Jaccard 阈值与短标题比较规则")
+        let terms = (0..<20).map { String(format: "word%02d", $0) }
+        let boundary1 = headline("boundary1", terms.prefix(13).joined(separator: " "), "bbc", 1)
+        let boundary2 = headline("boundary2", terms.joined(separator: " "), "guardian", 2)
+        assert(uniqueNewsEvents([boundary1, boundary2], mergeTopics: false, now: now).count == 1, "相似度恰为 0.65 时仍去重")
         assert(canonicalNewsURL(URL(string: "https://example.org/story?utm_source=rss#top")!) == "https://example.org/story")
         var rotationSnapshot = initial
         rotationSnapshot.rotationEvents = balanced
@@ -276,8 +289,58 @@ import UniformTypeIdentifiers
         assert(capped.prefix(3).map(\.id) == ["cn0", "world-a", "world-b"])
         assert(balancedByOrigin(mergedEvents(domesticFlood, now: now), ratio: nil).prefix(3).allSatisfy(\.isDomestic), "不限时保持纯时间顺序")
         print("PASS: 国内新闻占比上限、最新置顶、旧条目顺次下移、无新增不轮换、模式切换与兼容、小尺寸最新显示")
+        assert(widgetReloadDelay(last: now, now: now.addingTimeInterval(5), newsChanged: true) == 10)
+        assert(widgetReloadDelay(last: now, now: now.addingTimeInterval(5), newsChanged: false) == 50)
+        assert(widgetReloadDelay(last: now, now: now.addingTimeInterval(16), newsChanged: true) == 0)
+        var firstUpdate = initial
+        firstUpdate.checkedAt = now
+        firstUpdate.updatedAt = now.addingTimeInterval(5)
+        let laterHeadline = headline("incremental", "A new breakthrough in vaccines", "bbc", 0)
+        var incremental = refreshedSnapshot(previous: firstUpdate,
+            results: [SourceFetchResult(id: "bbc", events: [laterHeadline], fetchedAt: now.addingTimeInterval(10))],
+            now: now, enabledIDs: enabled)
+        incremental.updatedAt = now.addingTimeInterval(10)
+        assert(incremental.checkDate == now && incremental.revisionDate == now.addingTimeInterval(10), "增量内容不能伪造整轮检查时间")
+        assert(incremental.sourceFeeds?["bbc"]?.events.first?.id == laterHeadline.id && incremental.sourceFeeds?["guardian"]?.events.first?.id == other.id)
+        assert(incremental.sourceFeeds?["bbc"]?.fetchedAt == now.addingTimeInterval(10))
+        assert(widgetNewsChanged(from: firstUpdate, to: incremental, filter: NewsFilter(), now: now))
+        let preserved = refreshedSnapshot(previous: incremental,
+            results: [SourceFetchResult(id: "bbc", events: [election1], fetchedAt: now.addingTimeInterval(9))],
+            now: now.addingTimeInterval(11), enabledIDs: enabled)
+        assert(preserved.sourceFeeds?["bbc"]?.events.first?.id == laterHeadline.id, "较旧来源不能覆盖新来源")
+        let cleared = refreshedSnapshot(previous: incremental,
+            results: [SourceFetchResult(id: "bbc", events: [], fetchedAt: now.addingTimeInterval(11))],
+            now: now.addingTimeInterval(11), enabledIDs: enabled)
+        assert(cleared.sourceFeeds?["bbc"]?.events.isEmpty == true, "较新的成功空来源仍清除旧新闻")
+        assert(newerSnapshot(firstUpdate, incremental)?.revisionDate == incremental.revisionDate)
+        assert(newerSnapshot(incremental, firstUpdate)?.revisionDate == incremental.revisionDate)
+        assert(newerSnapshot(nil, incremental)?.revisionDate == incremental.revisionDate)
+        var hiddenChange = incremental
+        hiddenChange.sourceFeeds?["bbc"]?.events = [headline("hidden", "No matching keyword", "bbc", 0)]
+        let noMatches = NewsFilter(mode: .personal, followed: ["不存在的关键词"], followOnly: true)
+        assert(!widgetNewsChanged(from: firstUpdate, to: hiddenChange, filter: noMatches, now: now), "不可见的新闻变化不触发快速重载")
+        var translatedChanged = incremental
+        translatedChanged.sourceFeeds?["bbc"]?.events[0].translatedTitle = "疫苗新进展"
+        assert(widgetNewsChanged(from: incremental, to: translatedChanged, filter: NewsFilter(), now: now), "可见标题译文变化应快速重载")
+        let translationFilter = NewsFilter(mode: .personal, followed: ["疫苗"], followOnly: true)
+        assert(widgetNewsChanged(from: incremental, to: translatedChanged, filter: translationFilter, now: now), "译文可让原先未显示的新闻命中个性关键词")
+        print("PASS: 新闻重载15秒优先、常规55秒、增量摘要保留真实检查时间与新来源、空来源清理、最新摘要选择和可见内容变化")
         let temporary = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         let snapshotStore = NewsSnapshotStore(fileURL: temporary.appendingPathComponent("snapshot.json"))
+        let revisionStore = NewsSnapshotStore(fileURL: temporary.appendingPathComponent("revision/snapshot.json"))
+        try revisionStore.write(incremental)
+        let acceptedRevision = try revisionStore.write(firstUpdate)
+        assert(!acceptedRevision && revisionStore.read()?.revisionDate == incremental.revisionDate, "迟到的增量摘要不能覆盖新版本")
+        DispatchQueue.concurrentPerform(iterations: 20) { index in
+            var candidate = incremental
+            candidate.updatedAt = now.addingTimeInterval(Double(index + 20))
+            try! revisionStore.write(candidate)
+        }
+        assert(revisionStore.read()?.revisionDate == now.addingTimeInterval(39), "并发写入时最晚摘要胜出")
+        let decodedIncremental = try JSONDecoder().decode(NewsSnapshot.self, from: JSONEncoder().encode(incremental))
+        assert(decodedIncremental.checkDate == now && decodedIncremental.revisionDate == incremental.revisionDate)
+        let legacySnapshot = try JSONDecoder().decode(NewsSnapshot.self, from: JSONEncoder().encode(initial))
+        assert(legacySnapshot.updatedAt == nil && legacySnapshot.revisionDate == legacySnapshot.checkDate)
         try snapshotStore.write(offline)
         let acceptedOldSnapshot = try snapshotStore.write(initial)
         assert(!acceptedOldSnapshot, "迟到的旧请求不能覆盖新摘要")

@@ -39,6 +39,8 @@ struct CachedFeed: Codable {
     private var cameraLoop: Task<Void, Never>?
     private var mapLoop: Task<Void, Never>?
     private var widgetReloadTask: Task<Void, Never>?
+    private var widgetReloadAt: Date?
+    private var incrementalSnapshotTask: Task<Void, Never>?
     private var lastWidgetReload = Date.distantPast
     private var requestedWidgetSnapshot: NewsSnapshot?
     private let cacheURL = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("WorldWatch/feeds.json")
@@ -212,19 +214,31 @@ struct CachedFeed: Codable {
     }
     func setMapRegion(_ value: MapRegion) { MapRegion.selected = value; objectWillChange.send(); requestWidgetReload(force: true) }
     func setMapLayer(_ key: String, enabled: Bool) { WorldPreferences.shared.set(enabled, forKey: key); objectWillChange.send(); requestWidgetReload(force: true); startMapLayers() }
-    func requestWidgetReload(force: Bool = false) {
-        let delay = max(0, 55 - Date().timeIntervalSince(lastWidgetReload))
+    func requestWidgetReload(force: Bool = false, newsChanged: Bool = false) {
+        let now = Date()
+        let delay = widgetReloadDelay(last: lastWidgetReload, now: now, newsChanged: newsChanged)
         if force || delay == 0 {
-            widgetReloadTask?.cancel(); widgetReloadTask = nil
-            lastWidgetReload = Date()
+            widgetReloadTask?.cancel(); widgetReloadTask = nil; widgetReloadAt = nil
+            lastWidgetReload = now
             requestedWidgetSnapshot = NewsSnapshotStore.shared.read()
             for kind in ["WorldWatchNews", "WorldWatchDashboard", "WorldWatchMap", "WorldWatchLive"] { WidgetCenter.shared.reloadTimelines(ofKind: kind) }
-        } else if widgetReloadTask == nil {
+        } else {
+            let deadline = now.addingTimeInterval(delay)
+            if let existing = widgetReloadAt, existing <= deadline { return }
+            widgetReloadTask?.cancel(); widgetReloadAt = deadline
             widgetReloadTask = Task {
                 do { try await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000)) } catch { return }
-                widgetReloadTask = nil
+                widgetReloadTask = nil; widgetReloadAt = nil
                 requestWidgetReload(force: true)
             }
+        }
+    }
+    private func scheduleIncrementalSnapshot() {
+        guard incrementalSnapshotTask == nil else { return }
+        incrementalSnapshotTask = Task {
+            do { try await Task.sleep(nanoseconds: 1_000_000_000) } catch { return }
+            incrementalSnapshotTask = nil
+            publishWidgetSnapshot()
         }
     }
     func refresh(reloadWidget: Bool = false) async {
@@ -244,7 +258,10 @@ struct CachedFeed: Codable {
             for await (id, items, error) in group {
                 if let items {
                     let cached = await TitleTranslator.shared.applyCache(to: items)
+                    let previous = feeds[id]?.events ?? []
+                    let changed = !sameRenderedNews(previous, cached) || mapMarkers(previous) != mapMarkers(cached)
                     feeds[id] = CachedFeed(events: cached, fetched: Date()); errors.removeValue(forKey: id)
+                    if changed { scheduleIncrementalSnapshot() }
                 }
                 else if let error { errors[id] = error }
             }
@@ -254,6 +271,7 @@ struct CachedFeed: Codable {
         rotationDate = Date()
         NSLog("世界动态刷新完成：%ld/%ld 来源成功，%ld 条可显示", healthyCount, enabledSources.count, events.count)
         persistFeeds()
+        incrementalSnapshotTask?.cancel(); incrementalSnapshotTask = nil
         publishWidgetSnapshot(forceReload: reloadWidget)
         Task { await translateTitles() }
     }
@@ -264,12 +282,18 @@ struct CachedFeed: Codable {
         } catch { NSLog("缓存保存失败：%@", error.localizedDescription) }
     }
     func publishWidgetSnapshot(forceReload: Bool = false) {
+        let publishedAt = Date()
         let store = NewsSnapshotStore.shared
         let previous = store.read()
         let results = enabledSources.map { source in
-            SourceFetchResult(id: source.id, events: errors[source.id] == nil ? feeds[source.id]?.events : nil)
+            SourceFetchResult(id: source.id, events: errors[source.id] == nil ? feeds[source.id]?.events : nil, fetchedAt: feeds[source.id]?.fetched)
         }
-        let snapshot = refreshedSnapshot(previous: previous, results: results, now: lastCheck ?? previous?.checkDate ?? Date(), enabledIDs: enabledSources.map(\.id), mode: widgetDisplayMode)
+        let checked = max(lastCheck ?? .distantPast, previous?.checkDate ?? .distantPast)
+        var snapshot = refreshedSnapshot(previous: previous, results: results, now: checked == .distantPast ? publishedAt : checked, enabledIDs: enabledSources.map(\.id), mode: widgetDisplayMode)
+        snapshot.updatedAt = publishedAt
+        if let previous, !sameDigest(previous.rotationEvents ?? previous.events, snapshot.rotationEvents ?? snapshot.events) {
+            snapshot.changedAt = publishedAt
+        }
         let changed = (requestedWidgetSnapshot ?? previous).map {
             !sameDigest($0.rotationEvents ?? $0.events, snapshot.rotationEvents ?? snapshot.events)
                 || ($0.rotationEvents ?? $0.events).map(\.displayTitle) != (snapshot.rotationEvents ?? snapshot.events).map(\.displayTitle)
@@ -280,7 +304,11 @@ struct CachedFeed: Codable {
         do {
             let saved = try store.write(snapshot)
             NSLog("组件摘要同步：shared=%@ checked=%.0f items=%ld", store.groupAvailable ? "YES" : "NO", snapshot.date.timeIntervalSince1970, snapshot.events.count)
-            if forceReload || (saved && changed) { requestWidgetReload(force: forceReload) }
+            if forceReload { requestWidgetReload(force: true) }
+            else if saved {
+                let newsChanged = widgetNewsChanged(from: requestedWidgetSnapshot ?? previous, to: snapshot, filter: newsFilter, now: publishedAt)
+                if changed || newsChanged { requestWidgetReload(newsChanged: newsChanged) }
+            }
         } catch { NSLog("小组件共享摘要保存失败：%@", error.localizedDescription) }
     }
 }
