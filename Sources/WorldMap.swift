@@ -225,18 +225,19 @@ private let conflictPatterns = [
 // to the top weight when it also has a conflict word or an attack context.
 private let casualtyPattern = try! NSRegularExpression(pattern: #"(?i)\b(killed|dead|casualties|death toll)\b|死亡|遇难|遇難|伤亡|傷亡"#)
 private let attackPattern = try! NSRegularExpression(pattern: #"(?i)\b(attacks?|attacked|soldiers|militants|gunmen|army)\b|袭击|襲擊|士兵|武装|武裝"#)
+private let militaryStrikePattern = try! NSRegularExpression(pattern: #"(?i)\b(?:russia|russian|ukraine|ukrainian|israel|israeli|iran|iranian|military|missile|drone)\b(?:\s+\w+){0,3}\s+(?:strikes?|struck)\b|\b(?:strikes?|struck)\b.{0,80}\b(?:military|missile|drone)\b"#)
 
 func conflictWeight(_ title: String) -> Int {
     func has(_ regex: NSRegularExpression) -> Bool { regex.firstMatch(in: title, range: NSRange(title.startIndex..., in: title)) != nil }
-    let tier = conflictPatterns.firstIndex(where: has).map { 3 - $0 } ?? 0
+    let tier = has(militaryStrikePattern) ? 3 : conflictPatterns.firstIndex(where: has).map { 3 - $0 } ?? 0
     if has(casualtyPattern), tier > 0 || has(attackPattern) { return 3 }
     return tier
 }
 
 private let countryAliases: [String: [String]] = [
     "CHN": ["中国", "中國"], "USA": ["美国", "美國", "United States", "U.S.", "USA"],
-    "GBR": ["英国", "英國", "UK", "Britain", "British"], "RUS": ["俄罗斯", "俄羅斯", "Russia"],
-    "ISR": ["以色列", "Israeli"], "IRN": ["伊朗", "Iran"], "UKR": ["乌克兰", "烏克蘭"],
+    "GBR": ["英国", "英國", "UK", "Britain", "British"], "RUS": ["俄罗斯", "俄羅斯", "Russia", "Russian", "Russians"],
+    "ISR": ["以色列", "Israeli"], "IRN": ["伊朗", "Iran"], "UKR": ["乌克兰", "烏克蘭", "Ukrainian", "Ukrainians", "Kyiv", "基辅", "基輔"],
     "JPN": ["日本"], "TWN": ["台湾", "台灣"], "PRK": ["朝鲜", "朝鮮", "North Korea"],
     "KOR": ["韩国", "韓國", "South Korea"], "FRA": ["法国", "法國", "French"],
     "DEU": ["德国", "德國", "German"], "IND": ["印度"], "PAK": ["巴基斯坦"],
@@ -272,13 +273,46 @@ private let countryMatchers: [(MapCountry, NSRegularExpression)] = WorldMap.coun
     return (country, regex)
 }
 
-func mapConflicts(_ events: [WorldEvent], now: Date = Date()) -> [MapConflict] {
-    let recent = events.filter { !$0.disaster && !$0.isDomestic && $0.date.map { $0 <= now && $0 >= now.addingTimeInterval(-48 * 3600) } == true }
-        .map { ($0.title, conflictWeight($0.title)) }.filter { $0.1 > 0 }
-    return countryMatchers.compactMap { country, regex in
-        let score = recent.reduce(0) { score, item in
-            score + (regex.firstMatch(in: item.0, range: NSRange(item.0.startIndex..., in: item.0)) == nil ? 0 : item.1)
+struct ConflictSignal: Codable, Equatable, Sendable {
+    let id: String
+    let sourceID: String
+    let date: Date
+    let weight: Int
+    let countries: [String]
+}
+
+func conflictSignals(_ events: [WorldEvent], now: Date = Date()) -> [ConflictSignal] {
+    events.compactMap { event in
+        guard !event.disaster, !event.isDomestic, let date = event.date,
+              date <= now, date >= now.addingTimeInterval(-48 * 3600) else { return nil }
+        let weight = conflictWeight(event.title)
+        guard weight > 0 else { return nil }
+        let range = NSRange(event.title.startIndex..., in: event.title)
+        let countries = countryMatchers.compactMap { country, regex in
+            regex.firstMatch(in: event.title, range: range) == nil ? nil : country.id
         }
-        return conflictLevel(score) == 0 ? nil : MapConflict(countryID: country.id, score: score)
-    }.sorted { $0.score == $1.score ? $0.countryID < $1.countryID : $0.score > $1.score }.prefix(15).map { $0 }
+        return countries.isEmpty ? nil : ConflictSignal(id: event.id, sourceID: event.sourceID, date: date, weight: weight, countries: countries)
+    }
+}
+
+func mergedConflictSignals(_ old: [ConflictSignal], _ new: [ConflictSignal], enabledIDs: [String], now: Date = Date()) -> [ConflictSignal] {
+    var byID: [String: ConflictSignal] = [:]
+    for signal in old + new where enabledIDs.contains(signal.sourceID) && signal.date <= now && signal.date >= now.addingTimeInterval(-48 * 3600) {
+        byID[signal.id] = signal
+    }
+    // ponytail: retain at most 100 small, title-free observations; older signals expire after 48 hours.
+    return Array(byID.values.sorted { $0.date == $1.date ? $0.id < $1.id : $0.date > $1.date }.prefix(100))
+}
+
+func mapConflicts(signals: [ConflictSignal], now: Date = Date()) -> [MapConflict] {
+    var scores: [String: Int] = [:]
+    for signal in signals where signal.date <= now && signal.date >= now.addingTimeInterval(-48 * 3600) {
+        for id in signal.countries { scores[id, default: 0] += signal.weight }
+    }
+    return scores.compactMap { id, score in conflictLevel(score) == 0 ? nil : MapConflict(countryID: id, score: score) }
+        .sorted { $0.score == $1.score ? $0.countryID < $1.countryID : $0.score > $1.score }.prefix(15).map { $0 }
+}
+
+func mapConflicts(_ events: [WorldEvent], now: Date = Date()) -> [MapConflict] {
+    mapConflicts(signals: conflictSignals(events, now: now), now: now)
 }

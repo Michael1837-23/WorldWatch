@@ -276,7 +276,8 @@ struct WorldComponentProvider: TimelineProvider {
         return (0..<min(10, max(1, Int(Double(minutes * 60) / spacing)))).map { index in
             let date = index == 0 ? now : Date(timeIntervalSince1970: slot + Double(index) * spacing)
             let news = mode == .latest ? Array(pool.prefix(12)) : rotationEvents(pool, at: date, limit: 10).events
-            return WorldComponentEntry(date: date, events: news, note: (filter.mode == .personal || filter.eventsOnly) && news.isEmpty ? (filter.mode == .personal ? "没有符合个性设置的新闻" : "没有符合过滤条件的新闻") : nil, markers: mapMarkers(all, now: date), conflicts: mapConflicts(retained, now: date),
+            let conflicts = snapshot?.conflictSignals.map { mapConflicts(signals: $0, now: date) } ?? mapConflicts(retained, now: date)
+            return WorldComponentEntry(date: date, events: news, note: (filter.mode == .personal || filter.eventsOnly) && news.isEmpty ? (filter.mode == .personal ? "没有符合个性设置的新闻" : "没有符合过滤条件的新闻") : nil, markers: mapMarkers(all, now: date), conflicts: conflicts,
                                        cyclones: layers.cyclones(at: date), weather: weather, station: station, sun: solarPosition(at: date),
                                        settings: settings, cities: cities, frames: frames, index: Int(date.timeIntervalSince1970 / spacing))
         }
@@ -359,7 +360,7 @@ struct WorldLiveWidget: Widget {
 
 @main struct WorldWatchWidgets: WidgetBundle {
     init() {
-        NSLog("世界动态组件目录 2.8/20：WorldWatchNews、WorldWatchDashboard、WorldWatchMap、WorldWatchLive")
+        NSLog("世界动态组件目录 2.8/21：WorldWatchNews、WorldWatchDashboard、WorldWatchMap、WorldWatchLive")
     }
     var body: some Widget {
         WorldWatchWidget()

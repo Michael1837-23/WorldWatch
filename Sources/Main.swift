@@ -43,6 +43,7 @@ struct CachedFeed: Codable {
     private var incrementalSnapshotTask: Task<Void, Never>?
     private var lastWidgetReload = Date.distantPast
     private var requestedWidgetSnapshot: NewsSnapshot?
+    private var observedConflicts: [ConflictSignal] = []
     private let cacheURL = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("WorldWatch/feeds.json")
     init() {
         filter = widgetDisplayMode == .latest ? "最新" : "综合"
@@ -270,10 +271,12 @@ struct CachedFeed: Codable {
                 if let items {
                     let cached = await TitleTranslator.shared.applyCache(to: items)
                     let previous = events
+                    let previousConflicts = observedConflicts
+                    observedConflicts = mergedConflictSignals(observedConflicts, conflictSignals(cached), enabledIDs: enabledSources.map(\.id))
                     var updated = feeds
                     updated[id] = CachedFeed(events: cached, fetched: Date())
                     feeds = limitedCachedFeeds(updated); errors.removeValue(forKey: id)
-                    let changed = !sameRenderedNews(previous, events) || mapMarkers(previous) != mapMarkers(events)
+                    let changed = !sameRenderedNews(previous, events) || mapMarkers(previous) != mapMarkers(events) || previousConflicts != observedConflicts
                     if changed { scheduleIncrementalSnapshot() }
                 }
                 else if let error { errors[id] = error }
@@ -302,7 +305,8 @@ struct CachedFeed: Codable {
             SourceFetchResult(id: source.id, events: errors[source.id] == nil ? feeds[source.id]?.events : nil, fetchedAt: feeds[source.id]?.fetched)
         }
         let checked = max(lastCheck ?? .distantPast, previous?.checkDate ?? .distantPast)
-        var snapshot = refreshedSnapshot(previous: previous, results: results, now: checked == .distantPast ? publishedAt : checked, enabledIDs: enabledSources.map(\.id), mode: widgetDisplayMode)
+        var snapshot = refreshedSnapshot(previous: previous, results: results, now: checked == .distantPast ? publishedAt : checked, enabledIDs: enabledSources.map(\.id), mode: widgetDisplayMode, observedAt: publishedAt)
+        snapshot.conflictSignals = mergedConflictSignals(snapshot.conflictSignals ?? [], observedConflicts, enabledIDs: enabledSources.map(\.id), now: publishedAt)
         snapshot.updatedAt = publishedAt
         if let previous, !sameDigest(previous.rotationEvents ?? previous.events, snapshot.rotationEvents ?? snapshot.events) {
             snapshot.changedAt = publishedAt
@@ -313,6 +317,7 @@ struct CachedFeed: Codable {
                 || $0.mode != snapshot.mode || $0.availableSources != snapshot.availableSources || $0.enabledSourceIDs != snapshot.enabledSourceIDs
                 || !sameDigest(mergedEvents($0.sourceFeeds?.values.flatMap(\.events) ?? []), mergedEvents(snapshot.sourceFeeds?.values.flatMap(\.events) ?? []))
                 || mapMarkers($0.sourceFeeds?.values.flatMap(\.events) ?? []) != mapMarkers(snapshot.sourceFeeds?.values.flatMap(\.events) ?? [])
+                || $0.conflictSignals != snapshot.conflictSignals
         } ?? true
         do {
             let saved = try store.write(snapshot)

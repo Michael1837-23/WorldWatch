@@ -232,6 +232,7 @@ struct NewsSnapshot: Codable, Sendable {
     var rotationPageCount: Int? = nil
     var displayMode: NewsDisplayMode? = nil
     var updatedAt: Date? = nil
+    var conflictSignals: [ConflictSignal]? = nil
     var mode: NewsDisplayMode { displayMode ?? .latest }
     var checkDate: Date { checkedAt ?? date }
     var revisionDate: Date { max(checkDate, updatedAt ?? checkDate) }
@@ -396,6 +397,7 @@ func rotationTimeline(_ snapshot: NewsSnapshot, now: Date = Date(), minutes: Int
         let page = rotationEvents(ordered, at: entry.date, limit: pageSize)
         entry.events = page.events; entry.rotationPage = page.page; entry.rotationPageCount = page.count
         entry.rotationEvents = nil
+        entry.conflictSignals = nil
         // Timeline entries only need freshness metadata, not another copy of every feed.
         entry.sourceFeeds = snapshot.sourceFeeds?.mapValues { SourceSnapshot(events: [], fetchedAt: $0.fetchedAt) }
         return entry
@@ -416,6 +418,7 @@ func widgetTimeline(_ snapshot: NewsSnapshot, now: Date = Date(), pageSize: Int 
     entry.events = latestEvents(all, limit: pageSize, now: now, filter: filter)
     if (filter.mode == .personal || filter.eventsOnly) && entry.events.isEmpty { entry.note = filter.mode == .personal ? "没有符合个性设置的新闻" : "没有符合过滤条件的新闻" }
     entry.rotationEvents = nil
+    entry.conflictSignals = nil
     entry.rotationPage = nil; entry.rotationPageCount = nil
     entry.sourceFeeds = snapshot.sourceFeeds?.mapValues { SourceSnapshot(events: [], fetchedAt: $0.fetchedAt) }
     return [entry]
@@ -451,7 +454,7 @@ func newerSnapshot(_ first: NewsSnapshot?, _ second: NewsSnapshot?) -> NewsSnaps
     return second.revisionDate >= first.revisionDate ? second : first
 }
 
-func refreshedSnapshot(previous: NewsSnapshot?, results: [SourceFetchResult], now: Date = Date(), enabledIDs: [String] = NewsSource.all.map(\.id), mode: NewsDisplayMode? = nil) -> NewsSnapshot {
+func refreshedSnapshot(previous: NewsSnapshot?, results: [SourceFetchResult], now: Date = Date(), enabledIDs: [String] = NewsSource.all.map(\.id), mode: NewsDisplayMode? = nil, observedAt: Date? = nil) -> NewsSnapshot {
     var feeds = (previous?.sourceFeeds ?? [:]).filter { enabledIDs.contains($0.key) }
     if feeds.isEmpty, let previous {
         for (id, events) in Dictionary(grouping: previous.events, by: \.sourceID) {
@@ -459,12 +462,14 @@ func refreshedSnapshot(previous: NewsSnapshot?, results: [SourceFetchResult], no
         }
     }
     var successful = 0
+    var observed: [WorldEvent] = []
     for result in results {
         guard enabledIDs.contains(result.id) else { continue }
         if let events = result.events {
             let fetched = result.fetchedAt ?? now
             if feeds[result.id]?.fetchedAt ?? .distantPast <= fetched {
                 feeds[result.id] = SourceSnapshot(events: events, fetchedAt: fetched)
+                observed.append(contentsOf: events)
             }
             successful += 1
         }
@@ -476,10 +481,13 @@ func refreshedSnapshot(previous: NewsSnapshot?, results: [SourceFetchResult], no
     let oldPool = previous?.rotationEvents ?? previous?.events ?? []
     let changed = !sameDigest(oldPool, pool)
     let note = enabledIDs.isEmpty ? "尚未选择来源" : successful == 0 ? "连接失败 · 保留缓存" : successful < enabledIDs.count ? "部分来源不可用" : nil
+    let signalTime = observedAt ?? now
+    let oldSignals = previous?.conflictSignals ?? conflictSignals(previous?.sourceFeeds?.values.flatMap(\.events) ?? [], now: signalTime)
+    let signals = mergedConflictSignals(oldSignals, conflictSignals(observed, now: signalTime), enabledIDs: enabledIDs, now: signalTime)
     return NewsSnapshot(date: now, events: selected, availableSources: successful, note: note,
                         sourceFeeds: feeds, changedAt: changed ? now : previous?.changedAt ?? previous?.date,
                         lastSuccess: successful > 0 ? now : previous?.lastSuccess ?? previous?.checkDate, enabledSourceIDs: enabledIDs,
-                        checkedAt: now, rotationEvents: pool, displayMode: mode)
+                        checkedAt: now, rotationEvents: pool, displayMode: mode, conflictSignals: signals)
 }
 
 struct NewsSnapshotStore {
