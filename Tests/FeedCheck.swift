@@ -424,6 +424,7 @@ import UniformTypeIdentifiers
         }
         let compactLabels = mapLabels(projection: compactMap, reserved: cityObstacles).filter { !$0.text.isEmpty }
         assert(compactLabels.contains { $0.countryID == "CHN" } && compactLabels.contains { $0.countryID == "USA" }, "紧凑地图优先显示中美并避开城市圆点")
+        assert(compactLabels.contains { $0.countryID == "continent:africa" && $0.text == "Africa" }, "非洲保留大陆标签")
         assert(!compactLabels.contains { ["MEX", "IND", "COD", "ARG"].contains($0.countryID) }, "全球地图只保留主要国家标签")
         assert(abs(solarPosition(at: parseDate("2026-06-21T12:00:00Z")!).latitude - 23.4) < 1)
         assert(abs(solarPosition(at: parseDate("2026-12-21T12:00:00Z")!).latitude + 23.4) < 1)
@@ -728,6 +729,18 @@ import UniformTypeIdentifiers
         assert(issPosition(orbit, at: now.addingTimeInterval(301)) == nil)
         assert(mapSegments(orbit.map(\.coordinate)).count == 2)
         assert(issPosition(orbit, at: now) != issPosition(orbit, at: now.addingTimeInterval(180)))
+        assert(!recentISSTrack(orbit, at: now.addingTimeInterval(301)).isEmpty, "位置超出覆盖时间时仍可查看最近轨道")
+        assert(recentISSTrack(orbit, at: now.addingTimeInterval(2101)).isEmpty, "过期轨道不长期显示")
+        let completeOrbit = [ISSPoint(date: now.addingTimeInterval(-2700), coordinate: .init(longitude: 0, latitude: 10)), ISSPoint(date: now.addingTimeInterval(2700), coordinate: .init(longitude: 30, latitude: 30))]
+        let freshOrbit = MapLayerCache(checkedAt: now.addingTimeInterval(-60), fetchedAt: now.addingTimeInterval(-60), value: completeOrbit)
+        assert(!issRefreshNeeded(freshOrbit, at: now, minimumAge: 3600))
+        assert(issRefreshNeeded(freshOrbit, at: now.addingTimeInterval(901), minimumAge: 3600), "组件不能等待一小时才补充空间站轨道")
+        let recentFailure = MapLayerCache(checkedAt: now.addingTimeInterval(-100), fetchedAt: now.addingTimeInterval(-3600), value: orbit)
+        let oldFailure = MapLayerCache(checkedAt: now.addingTimeInterval(-301), fetchedAt: now.addingTimeInterval(-3600), value: orbit)
+        assert(!issRefreshNeeded(recentFailure, at: now, minimumAge: 1800), "失败后保留五分钟退避")
+        assert(issRefreshNeeded(oldFailure, at: now, minimumAge: 1800), "失败后五分钟可重试")
+        assert(issRefreshNeeded(nil, at: now, minimumAge: 1800))
+        print("PASS: Africa 标签、最近空间站轨道、覆盖期补刷及五分钟失败重试")
         let stationJSON = Data(#"[{"latitude":10,"longitude":20,"timestamp":1000},{"latitude":20,"longitude":30,"timestamp":1300}]"#.utf8)
         let stationPoints = try parseISS(stationJSON)
         assert(stationPoints.count == 2)

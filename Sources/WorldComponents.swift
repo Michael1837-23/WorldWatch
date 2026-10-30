@@ -87,7 +87,8 @@ struct WorldMapCanvas: View {
             let labels: [MapLabel] = []
             let visibleMarkers = markers.filter { $0.earthquake ? settings.earthquakes : settings.disasters }
             let visibleCyclones = settings.cyclones ? cyclones : []
-            let position = settings.iss ? issPosition(station, at: date) : nil
+            let orbit = settings.iss ? recentISSTrack(station, at: date) : []
+            let position = issPosition(orbit, at: date)
             let anchors = visibleMarkers.map(\.coordinate) + visibleCyclones.compactMap(\.current) + cameras.map(\.coordinate) + (position.map { [$0] } ?? [])
             let obstacles = anchors.map { point -> CGRect in
                 let center = projection.visible(point)
@@ -106,22 +107,24 @@ struct WorldMapCanvas: View {
                     context.stroke(path, with: .color(color), style: StrokeStyle(lineWidth: width, dash: dashed ? [3, 3] : []))
                 }
             }
-            // Live layers stay quiet and text-free: country names are the only words on the map.
+            // Live layers stay text-free; the map labels countries and Africa.
+            if orbit.count > 1 {
+                track(orbit.map(\.coordinate), color: (colorScheme == .dark ? Color.cyan : .blue).opacity(0.38), dashed: true, width: 1)
+            }
             if let position {
-                track(station.map(\.coordinate), color: Color.primary.opacity(0.14), dashed: true, width: 0.8)
-                let center = projection.visible(position), ink = Color.primary.opacity(0.45)
+                let center = projection.visible(position), ink = Color.primary.opacity(0.85)
                 // A tiny satellite: square body with a solar panel on each side.
-                context.fill(Path(CGRect(x: center.x - 1.5, y: center.y - 1.5, width: 3, height: 3)), with: .color(ink))
-                context.fill(Path(CGRect(x: center.x - 6, y: center.y - 1, width: 3.5, height: 2)), with: .color(ink))
-                context.fill(Path(CGRect(x: center.x + 2.5, y: center.y - 1, width: 3.5, height: 2)), with: .color(ink))
+                context.fill(Path(CGRect(x: center.x - 2, y: center.y - 2, width: 4, height: 4)), with: .color(ink))
+                context.fill(Path(CGRect(x: center.x - 8, y: center.y - 1.5, width: 4.5, height: 3)), with: .color(ink))
+                context.fill(Path(CGRect(x: center.x + 3.5, y: center.y - 1.5, width: 4.5, height: 3)), with: .color(ink))
             }
             for cyclone in visibleCyclones {
                 let color: Color = cyclone.red ? .red : .orange
-                track(cycloneForecast(cyclone), color: color.opacity(0.35), dashed: true, width: 1)
+                track(cycloneForecast(cyclone), color: color.opacity(0.5), dashed: true, width: 1)
                 if let point = cyclone.current {
                     var icon = context.resolve(Image(systemName: "hurricane"))
-                    icon.shading = .color(color.opacity(0.6))
-                    context.draw(icon, in: CGRect(x: projection.visible(point).x - 6, y: projection.visible(point).y - 6, width: 12, height: 12))
+                    icon.shading = .color(color.opacity(0.85))
+                    context.draw(icon, in: CGRect(x: projection.visible(point).x - 7, y: projection.visible(point).y - 7, width: 14, height: 14))
                 }
             }
             for marker in visibleMarkers {
@@ -138,7 +141,8 @@ struct WorldMapCanvas: View {
             }
             for item in mapLabels(projection: projection, reserved: labels + obstacles.map { MapLabel(countryID: "obstacle", text: "", rect: $0) }) where !item.text.isEmpty {
                 let dynamic = ["iss", "cyclone", "event"].contains(item.countryID) || item.countryID.hasPrefix("city:")
-                let text = Text(item.text).font(.system(size: 9.5, weight: .semibold)).foregroundColor(dynamic ? .primary : .primary.opacity(0.72))
+                let continent = item.countryID.hasPrefix("continent:")
+                let text = Text(item.text).font(.system(size: 9.5, weight: continent ? .medium : .semibold)).foregroundColor(dynamic ? .primary : .primary.opacity(continent ? 0.60 : 0.72))
                 if dynamic {
                     context.fill(Path(roundedRect: item.rect, cornerRadius: 2), with: .color(Color(nsColor: .windowBackgroundColor).opacity(0.82)))
                 }

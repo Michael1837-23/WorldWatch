@@ -172,6 +172,12 @@ func issPosition(_ points: [ISSPoint], at date: Date) -> MapCoordinate? {
     return first.coordinate
 }
 
+func recentISSTrack(_ points: [ISSPoint], at date: Date) -> [ISSPoint] {
+    guard let first = points.first, let last = points.last,
+          first.date <= date, last.date >= date.addingTimeInterval(-1800) else { return [] }
+    return points
+}
+
 func mapSegments(_ coordinates: [MapCoordinate]) -> [[MapCoordinate]] {
     var result: [[MapCoordinate]] = []
     for point in coordinates {
@@ -186,6 +192,15 @@ struct MapLayerCache<Value: Codable & Sendable>: Codable, Sendable {
     let checkedAt: Date
     let fetchedAt: Date
     let value: Value
+}
+
+func issRefreshNeeded(_ cache: MapLayerCache<[ISSPoint]>?, at now: Date, minimumAge: TimeInterval) -> Bool {
+    guard let cache else { return true }
+    let interval = min(900, max(0, minimumAge))
+    let failed = cache.checkedAt.timeIntervalSince(cache.fetchedAt) > 1
+    let coversTimeline = issPosition(cache.value, at: now.addingTimeInterval(1800)) != nil
+    let wait = failed || !coversTimeline ? min(300, interval) : interval
+    return now.timeIntervalSince(cache.checkedAt) >= wait
 }
 
 struct MapLayerStore: Sendable {
@@ -207,7 +222,7 @@ struct MapLayerStore: Sendable {
         return Array(cache.value.filter { $0.end >= date.addingTimeInterval(-18 * 3600) }.prefix(5))
     }
     func weather() -> [CityWeather] { read("weather", as: [CityWeather].self)?.value ?? [] }
-    func station() -> [ISSPoint] { Array((read("iss", as: [ISSPoint].self)?.value ?? []).prefix(60)) }
+    func station(at date: Date = Date()) -> [ISSPoint] { recentISSTrack(Array((read("iss", as: [ISSPoint].self)?.value ?? []).prefix(60)), at: date) }
 }
 
 actor MapLayerService {
@@ -232,17 +247,27 @@ actor MapLayerService {
         return changes.0 || changes.1 || changes.2
     }
     private func request(_ url: URL, deadline: Date) async throws -> Data {
-        let remaining = deadline.timeIntervalSinceNow
-        guard remaining > 0 else { throw URLError(.timedOut) }
-        var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: max(0.1, remaining))
-        request.setValue("WorldWatch/2.7", forHTTPHeaderField: "User-Agent")
-        let configuration = URLSessionConfiguration.ephemeral
-        configuration.timeoutIntervalForResource = max(0.1, remaining)
-        let session = URLSession(configuration: configuration)
-        defer { session.invalidateAndCancel() }
-        let (data, response) = try await session.data(for: request)
-        guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else { throw FeedError.invalid }
-        return data
+        for attempt in 0..<2 {
+            let remaining = deadline.timeIntervalSinceNow
+            guard remaining > 0 else { throw URLError(.timedOut) }
+            var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: max(0.1, remaining))
+            request.setValue("WorldWatch/2.8", forHTTPHeaderField: "User-Agent")
+            let configuration = URLSessionConfiguration.ephemeral
+            configuration.timeoutIntervalForResource = max(0.1, remaining)
+            let session = URLSession(configuration: configuration)
+            defer { session.invalidateAndCancel() }
+            do {
+                let (data, response) = try await session.data(for: request)
+                guard let http = response as? HTTPURLResponse else { throw FeedError.invalid }
+                guard (200..<300).contains(http.statusCode) else { throw FeedError.http(http.statusCode) }
+                return data
+            } catch let error as URLError where attempt == 0 && [.timedOut, .networkConnectionLost, .secureConnectionFailed].contains(error.code) {
+                try await Task.sleep(nanoseconds: 400_000_000)
+            } catch FeedError.http(let status) where attempt == 0 && [502, 503, 504].contains(status) {
+                try await Task.sleep(nanoseconds: 400_000_000)
+            }
+        }
+        throw URLError(.cannotConnectToHost)
     }
     private func refreshCyclones(age: TimeInterval, deadline: Date, enabled: Bool) async -> Bool {
         guard enabled else { return false }
@@ -280,7 +305,7 @@ actor MapLayerService {
     private func refreshISS(age: TimeInterval, deadline: Date, enabled: Bool) async -> Bool {
         guard enabled else { return false }
         let old = store.read("iss", as: [ISSPoint].self), now = Date()
-        if let old, now.timeIntervalSince(old.checkedAt) < age { return false }
+        if !issRefreshNeeded(old, at: now, minimumAge: age) { return false }
         do {
             let data = try await request(URL(string: "https://api.wheretheiss.at/v1/satellites/25544")!, deadline: deadline)
             let current = try parseISS(data)[0]

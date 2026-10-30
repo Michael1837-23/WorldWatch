@@ -149,6 +149,16 @@ func mapLabels(projection: MapProjection, reserved: [MapLabel] = []) -> [MapLabe
             break
         }
     }
+    let africaName = "Africa"
+    let africaLine = CTLineCreateWithAttributedString(NSAttributedString(string: africaName, attributes: [NSAttributedString.Key(kCTFontAttributeName as String): font]))
+    let africaWidth = ceil(CTLineGetTypographicBounds(africaLine, nil, nil, nil)) + 8
+    for coordinate in [MapCoordinate(longitude: 18, latitude: 0), .init(longitude: 14, latitude: -6)] {
+        let center = projection.visible(coordinate)
+        let rect = CGRect(x: center.x - africaWidth / 2, y: center.y - 8, width: africaWidth, height: 16)
+        if frame.contains(rect), !result.contains(where: { $0.rect.insetBy(dx: -2, dy: -2).intersects(rect) }) {
+            result.append(MapLabel(countryID: "continent:africa", text: africaName, rect: rect)); break
+        }
+    }
     return result
 }
 

@@ -83,7 +83,7 @@ struct CachedFeed: Codable {
         mapLoop = Task {
             while !Task.isCancelled {
                 if await MapLayerService.shared.refresh(cities: selectedCities) { requestWidgetReload() }
-                do { try await Task.sleep(nanoseconds: 1800 * 1_000_000_000) } catch { return }
+                do { try await Task.sleep(nanoseconds: 300 * 1_000_000_000) } catch { return }
             }
         }
     }
