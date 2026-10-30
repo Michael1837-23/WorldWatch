@@ -222,7 +222,7 @@ import UniformTypeIdentifiers
         var rotatingSnapshot = snapshot; rotatingSnapshot.displayMode = .rotation
         let filteredRotation = widgetTimeline(rotatingSnapshot, now: now, filter: none)
         assert(filteredRotation.count == 60 && filteredRotation.allSatisfy { $0.events.isEmpty && $0.note == "没有符合个性设置的新闻" })
-        let conflictEvents = [headline("conflict-filter", "Iran missile attack", "bbc", 1)]
+        let conflictEvents = [headline("conflict-filter", "Missile attack hits Iran", "bbc", 1)]
         let conflictsBefore = mapConflicts(conflictEvents, now: now)
         _ = applyNewsFilter(conflictEvents, filter: none)
         assert(!conflictsBefore.isEmpty && mapConflicts(conflictEvents, now: now) == conflictsBefore, "地图仍使用原始新闻")
@@ -417,6 +417,14 @@ import UniformTypeIdentifiers
         for a in labels.indices { for b in labels.indices where a < b { assert(!labels[a].rect.intersects(labels[b].rect)) } }
         let larger = mapLabels(projection: MapProjection(bounds: MapRegion.world.bounds, size: CGSize(width: 800, height: 400)))
         assert(larger.count >= labels.count && larger.count <= 30)
+        let compactMap = MapProjection(bounds: MapRegion.world.bounds, size: CGSize(width: 350, height: 145))
+        let cityObstacles = ["shanghai", "hongkong", "beijing", "newyork", "london"].compactMap { id in CameraCity.all.first { $0.id == id } }.map { city -> MapLabel in
+            let point = compactMap.visible(city.coordinate)
+            return MapLabel(countryID: "city", text: "", rect: CGRect(x: point.x - 6, y: point.y - 6, width: 12, height: 12))
+        }
+        let compactLabels = mapLabels(projection: compactMap, reserved: cityObstacles).filter { !$0.text.isEmpty }
+        assert(compactLabels.contains { $0.countryID == "CHN" } && compactLabels.contains { $0.countryID == "USA" }, "紧凑地图优先显示中美并避开城市圆点")
+        assert(!compactLabels.contains { ["MEX", "IND", "COD", "ARG"].contains($0.countryID) }, "全球地图只保留主要国家标签")
         assert(abs(solarPosition(at: parseDate("2026-06-21T12:00:00Z")!).latitude - 23.4) < 1)
         assert(abs(solarPosition(at: parseDate("2026-12-21T12:00:00Z")!).latitude + 23.4) < 1)
         let sun = solarPosition(at: now)
@@ -439,7 +447,7 @@ import UniformTypeIdentifiers
         assert(!bilibiliSceneTitle("纽约街景点歌聊天", city: newYork))
         assert(!bilibiliSceneTitle("【直播】重庆狼队 vs 长沙TES.A", city: chongqing) && !bilibiliSceneTitle("窗外街景｜北京朝阳大悦城实时街景", city: chongqing), "排除电竞与其他城市")
         assert(WorldMap.countries.first { $0.id == "CHN" }?.name == "China" && WorldMap.countries.first { $0.id == "USA" }?.name == "United States")
-        assert(mapConflicts([headline("china-en", "China missile airstrike", "bbc", 1)], now: now).first?.countryID == "CHN", "英文 China 计入中国")
+        assert(mapConflicts([headline("china-en", "Missile airstrike hits China", "bbc", 1)], now: now).first?.countryID == "CHN", "英文 China 计入中国")
         assert(mapConflicts([headline("china-domestic", "中国发布新规", "cns-china", 1)], now: now).isEmpty, "国内来源不计入冲突")
         assert(cameraJPEG(Data(repeating: 0, count: 6000)) == nil)
         assert(cameraRotationIndex(entry: 19, city: 3, count: 1) == 0)
@@ -654,7 +662,7 @@ import UniformTypeIdentifiers
         assert(realTrack.history.first == MapCoordinate(longitude: 89.1, latitude: 16))
         assert(realTrack.current == MapCoordinate(longitude: 81.6, latitude: 16.4))
         assert(realTrack.forecast.last == MapCoordinate(longitude: 81.6, latitude: 21.9))
-        assert(mapConflicts([headline("highest", "Iran airstrike despite ceasefire", "bbc", 1)], now: now).first?.score == 3)
+        assert(mapConflicts([headline("highest", "Airstrike hits Iran despite ceasefire", "bbc", 1)], now: now).first?.score == 3)
         let disasterHeadline = WorldEvent(id: "disaster-title", sourceID: "gdacs", title: "Iran airstrike killed", url: imageLink,
                                          date: now, timeKind: "发生", disaster: true, severity: "红色预警")
         assert(mapConflicts([disasterHeadline], now: now).isEmpty)
@@ -664,13 +672,29 @@ import UniformTypeIdentifiers
         assert(conflictWeight("Gunmen attack village, 12 killed") == 3 && conflictWeight("Troops advance, dozens dead") == 3)
         assert((0...32).map(conflictLevel) == (0...32).map { score in score >= 30 ? 4 : score >= 16 ? 3 : score >= 8 ? 2 : score >= 3 ? 1 : 0 })
         assert(mapConflicts([headline("domestic", "中国导弹空袭", "cns-china", 1)], now: now).isEmpty)
-        assert(mapConflicts([headline("48h", "Iran missiles", "bbc", 48 * 3600 + 1)], now: now).isEmpty)
-        assert(mapConflicts([headline("36h", "Iran missiles", "bbc", 36 * 3600)], now: now).first?.score == 3)
+        assert(mapConflicts([headline("48h", "Missiles hit Iran", "bbc", 48 * 3600 + 1)], now: now).isEmpty)
+        assert(mapConflicts([headline("36h", "Missiles hit Iran", "bbc", 36 * 3600)], now: now).first?.score == 3)
         assert(conflictWeight("Russia strikes energy facilities in Kyiv") == 3)
         assert(conflictWeight("Workers strike as Russia discusses pay") == 0, "普通罢工不能误判为军事打击")
         let strikeCountries = mapConflicts([headline("kyiv-strike", "Russia strikes energy facilities in Kyiv", "bbc", 3600)], now: now)
-        assert(strikeCountries.contains { $0.countryID == "UKR" } && strikeCountries.contains { $0.countryID == "RUS" })
-        let olderConflict = headline("old-conflict", "Iran missile attack", "bbc", 12 * 3600)
+        assert(strikeCountries.contains { $0.countryID == "UKR" } && !strikeCountries.contains { $0.countryID == "RUS" }, "袭击方不能被当成事发地")
+        assert(conflictLocations("US says Russia strikes energy facilities in Kyiv") == ["UKR"], "发言方和攻击方不染色")
+        assert(conflictLocations("Ukraine launches missile attacks on Russia") == ["RUS"], "按攻击目标而非固定国家名单判断")
+        assert(conflictLocations("Ukraine launches missile strikes on Moscow") == ["RUS"])
+        assert(conflictLocations("US troops killed in Iraq") == ["IRQ"])
+        assert(conflictLocations("US officials condemn attacks in Gaza") == ["PSE"])
+        assert(conflictLocations("Three killed in Russian missile attack on Kyiv") == ["UKR"], "俄军修饰词不是事发地")
+        assert(conflictLocations("美军空袭伊朗首都德黑兰") == ["IRN"])
+        assert(conflictLocations("俄罗斯导弹袭击乌克兰基辅") == ["UKR"])
+        assert(conflictLocations("US announces sanctions on Iran").isEmpty)
+        assert(conflictLocations("Qatari officials in Iran in bid to revive ceasefire deal with US").isEmpty)
+        assert(conflictLocations("Ukraine suspends attacks on Russia").isEmpty)
+        assert(conflictLocations("特朗普施压下，乌克兰已暂停袭击俄罗斯炼油厂").isEmpty)
+        assert(conflictLocations("美伊战争推升油价 美国石油巨擘获利攀升").isEmpty)
+        let legacySignal = ConflictSignal(id: "old", sourceID: "bbc", date: now, weight: 3, countries: ["USA"])
+        assert(mapConflicts(signals: [legacySignal], now: now).isEmpty, "旧版按提及国家评分的数据不能继续误染")
+        print("PASS: 冲突按事发地与受袭目标归属，排除发言方、攻击方及经济连带报道")
+        let olderConflict = headline("old-conflict", "Missile attack hits Iran", "bbc", 12 * 3600)
         let newerFillers = (0..<120).map { headline("filler-\($0)", "Ordinary update \($0)", "guardian", Double($0)) }
         let boundedSnapshot = refreshedSnapshot(previous: nil, results: [.init(id: "bbc", events: [olderConflict]), .init(id: "guardian", events: newerFillers)], now: now, enabledIDs: ["bbc", "guardian"])
         assert(boundedSnapshot.sourceFeeds?.values.reduce(0, { $0 + $1.events.count }) == 100)
@@ -686,7 +710,7 @@ import UniformTypeIdentifiers
         assert(decodedSignals.conflictSignals == boundedSnapshot.conflictSignals)
         print("PASS: 100 条新闻上限下仍保留轻量冲突信号、来源关闭和 48 小时过期，时间线不重复携带")
         assert(mapConflicts([headline("irish", "Ireland military airstrikes", "bbc", 1)], now: now).allSatisfy { $0.countryID != "IRN" })
-        let many = WorldMap.ranked.prefix(25).enumerated().map { headline("conflict\($0.offset)", $0.element.name + " airstrikes", "bbc", 1) }
+        let many = WorldMap.ranked.prefix(25).enumerated().map { headline("conflict\($0.offset)", "Airstrikes hit " + $0.element.name, "bbc", 1) }
         assert(mapConflicts(many, now: now).count == 15)
         assert(cityTime(newYork, at: parseDate("2026-11-01T05:30:00Z")!) == "01:30")
         assert(cityTime(newYork, at: parseDate("2026-11-01T06:30:00Z")!) == "01:30")

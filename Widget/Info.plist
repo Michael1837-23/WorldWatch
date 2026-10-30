@@ -6,7 +6,7 @@
 <key>CFBundleDisplayName</key><string>世界动态</string>
 <key>CFBundleName</key><string>WorldWatchWidget</string>
 <key>CFBundlePackageType</key><string>XPC!</string>
-<key>CFBundleVersion</key><string>21</string>
+<key>CFBundleVersion</key><string>22</string>
 <key>CFBundleShortVersionString</key><string>2.8</string>
 <key>CFBundleSupportedPlatforms</key><array><string>MacOSX</string></array>
 <key>LSMinimumSystemVersion</key><string>26.0</string>

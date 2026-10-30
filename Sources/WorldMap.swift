@@ -1,4 +1,5 @@
 import Foundation
+import CoreText
 
 enum WorldPreferences {
     static var shared: UserDefaults {
@@ -125,16 +126,28 @@ struct MapLabel: Equatable {
 
 func mapLabels(projection: MapProjection, reserved: [MapLabel] = []) -> [MapLabel] {
     var result = reserved
-    let frame = CGRect(origin: .zero, size: projection.size)
-    let limit = min(30, max(6, Int(projection.size.width * projection.size.height / 6000)))
-    for country in WorldMap.ranked {
-        let center = projection.visible(country.label)
-        // ponytail: conservative glyph bounds, use measured CoreText widths if typography changes.
-        let width = Double(country.name.count) * 5.6 + 10
-        let rect = CGRect(x: center.x - width / 2, y: center.y - 7, width: width, height: 14)
-        guard frame.contains(rect), !result.contains(where: { $0.rect.intersects(rect) }) else { continue }
-        result.append(MapLabel(countryID: country.id, text: country.name, rect: rect))
-        if result.count - reserved.count >= limit { break }
+    let frame = CGRect(origin: .zero, size: projection.size).insetBy(dx: 4, dy: 4)
+    let primary = ["CHN", "USA", "RUS", "CAN", "BRA", "AUS"]
+    let ids = projection.bounds.east - projection.bounds.west >= 240 ? primary : primary + ["GBR", "FRA", "DEU", "JPN", "KOR", "ITA", "ESP", "TUR", "IRN", "SAU", "ZAF"]
+    let anchors: [String: [MapCoordinate]] = [
+        "CHN": [.init(longitude: 103, latitude: 35), .init(longitude: 94, latitude: 40), .init(longitude: 85, latitude: 38)],
+        "USA": [.init(longitude: -103, latitude: 38), .init(longitude: -109, latitude: 37)],
+        "RUS": [.init(longitude: 96, latitude: 61)], "CAN": [.init(longitude: -107, latitude: 58)],
+        "BRA": [.init(longitude: -53, latitude: -11)], "AUS": [.init(longitude: 134, latitude: -25)]
+    ]
+    let font = CTFontCreateUIFontForLanguage(.system, 9.5, nil)!
+    for id in ids {
+        guard let country = WorldMap.countries.first(where: { $0.id == id }) else { continue }
+        let name = id == "USA" && projection.size.width < 440 ? "USA" : country.name
+        let line = CTLineCreateWithAttributedString(NSAttributedString(string: name, attributes: [NSAttributedString.Key(kCTFontAttributeName as String): font]))
+        let width = ceil(CTLineGetTypographicBounds(line, nil, nil, nil)) + 8
+        for coordinate in anchors[id] ?? [country.label] {
+            let center = projection.visible(coordinate)
+            let rect = CGRect(x: center.x - width / 2, y: center.y - 8, width: width, height: 16)
+            guard frame.contains(rect), !result.contains(where: { $0.rect.insetBy(dx: -2, dy: -2).intersects(rect) }) else { continue }
+            result.append(MapLabel(countryID: country.id, text: name, rect: rect))
+            break
+        }
     }
     return result
 }
@@ -226,24 +239,25 @@ private let conflictPatterns = [
 private let casualtyPattern = try! NSRegularExpression(pattern: #"(?i)\b(killed|dead|casualties|death toll)\b|死亡|遇难|遇難|伤亡|傷亡"#)
 private let attackPattern = try! NSRegularExpression(pattern: #"(?i)\b(attacks?|attacked|soldiers|militants|gunmen|army)\b|袭击|襲擊|士兵|武装|武裝"#)
 private let militaryStrikePattern = try! NSRegularExpression(pattern: #"(?i)\b(?:russia|russian|ukraine|ukrainian|israel|israeli|iran|iranian|military|missile|drone)\b(?:\s+\w+){0,3}\s+(?:strikes?|struck)\b|\b(?:strikes?|struck)\b.{0,80}\b(?:military|missile|drone)\b"#)
+private let assaultPattern = try! NSRegularExpression(pattern: #"(?i)\b(?:attacks?|attacked|bombs?|bombed|invades?|invaded|shells?|shelled)\b|袭击|襲擊|轰炸|轟炸|入侵"#)
 
 func conflictWeight(_ title: String) -> Int {
     func has(_ regex: NSRegularExpression) -> Bool { regex.firstMatch(in: title, range: NSRange(title.startIndex..., in: title)) != nil }
     let tier = has(militaryStrikePattern) ? 3 : conflictPatterns.firstIndex(where: has).map { 3 - $0 } ?? 0
     if has(casualtyPattern), tier > 0 || has(attackPattern) { return 3 }
-    return tier
+    return tier == 0 && has(assaultPattern) ? 2 : tier
 }
 
 private let countryAliases: [String: [String]] = [
     "CHN": ["中国", "中國"], "USA": ["美国", "美國", "United States", "U.S.", "USA"],
-    "GBR": ["英国", "英國", "UK", "Britain", "British"], "RUS": ["俄罗斯", "俄羅斯", "Russia", "Russian", "Russians"],
-    "ISR": ["以色列", "Israeli"], "IRN": ["伊朗", "Iran"], "UKR": ["乌克兰", "烏克蘭", "Ukrainian", "Ukrainians", "Kyiv", "基辅", "基輔"],
+    "GBR": ["英国", "英國", "UK", "Britain", "British"], "RUS": ["俄罗斯", "俄羅斯", "Russia", "Russian", "Russians", "Moscow", "Kursk", "Belgorod", "莫斯科", "库尔斯克", "庫爾斯克", "别尔哥罗德", "別爾哥羅德"],
+    "ISR": ["以色列", "Israeli"], "IRN": ["伊朗", "Iran", "Tehran", "德黑兰", "德黑蘭"], "UKR": ["乌克兰", "烏克蘭", "Ukrainian", "Ukrainians", "Kyiv", "Kharkiv", "Odesa", "Zaporizhzhia", "基辅", "基輔", "哈尔科夫", "哈爾科夫", "敖德萨", "敖德薩"],
     "JPN": ["日本"], "TWN": ["台湾", "台灣"], "PRK": ["朝鲜", "朝鮮", "North Korea"],
     "KOR": ["韩国", "韓國", "South Korea"], "FRA": ["法国", "法國", "French"],
     "DEU": ["德国", "德國", "German"], "IND": ["印度"], "PAK": ["巴基斯坦"],
-    "AFG": ["阿富汗"], "IRQ": ["伊拉克"], "SYR": ["叙利亚", "敘利亞", "Syria"],
-    "LBN": ["黎巴嫩"], "PSE": ["巴勒斯坦", "Palestine", "Gaza", "加沙"],
-    "SAU": ["沙特", "沙烏地", "Saudi"], "YEM": ["也门", "葉門", "也門"],
+    "AFG": ["阿富汗"], "IRQ": ["伊拉克"], "SYR": ["叙利亚", "敘利亞", "Syria", "Damascus", "大马士革", "大馬士革"],
+    "LBN": ["黎巴嫩", "Beirut", "贝鲁特", "貝魯特"], "PSE": ["巴勒斯坦", "Palestine", "Gaza", "West Bank", "Hebron", "加沙", "约旦河西岸", "約旦河西岸"],
+    "SAU": ["沙特", "沙烏地", "Saudi"], "YEM": ["也门", "葉門", "也門", "Sanaa", "Sana'a", "萨那", "薩那"],
     "TUR": ["土耳其", "Turkey", "Türkiye"], "EGY": ["埃及"], "JOR": ["约旦", "約旦"],
     "ARE": ["阿联酋", "阿聯酋", "UAE"], "QAT": ["卡塔尔", "卡達", "卡塔爾"],
     "CAN": ["加拿大"], "MEX": ["墨西哥"], "BRA": ["巴西"], "ARG": ["阿根廷"],
@@ -257,7 +271,7 @@ private let countryAliases: [String: [String]] = [
     "SWE": ["瑞典"], "NOR": ["挪威"], "FIN": ["芬兰", "芬蘭"], "DNK": ["丹麦", "丹麥"],
     "CHE": ["瑞士"], "AUT": ["奥地利", "奧地利"], "GRC": ["希腊", "希臘"],
     "IRL": ["爱尔兰", "愛爾蘭"], "ZAF": ["南非"], "NGA": ["尼日利亚", "奈及利亞"],
-    "KEN": ["肯尼亚", "肯亞"], "ETH": ["埃塞俄比亚", "衣索比亞"], "SDN": ["苏丹", "蘇丹"],
+    "KEN": ["肯尼亚", "肯亞"], "ETH": ["埃塞俄比亚", "衣索比亞"], "SDN": ["苏丹", "蘇丹", "Khartoum", "Darfur", "El Fasher", "喀土穆", "达尔富尔", "達爾富爾"],
     "SOM": ["索马里", "索馬利亞"], "LBY": ["利比亚", "利比亞"], "MAR": ["摩洛哥"]
 ]
 
@@ -279,6 +293,36 @@ struct ConflictSignal: Codable, Equatable, Sendable {
     let date: Date
     let weight: Int
     let countries: [String]
+    var attributionVersion: Int? = nil
+}
+
+private let conflictLocationPrefix = try! NSRegularExpression(pattern: #"(?i)(?:\b(?:in|inside|across|near|within|over)\s+(?:(?:the|northern|southern|eastern|western|central|north|south|east|west|occupied)\s+){0,3}|(?:在|于|於|袭击|襲擊|空袭|空襲|轰炸|轟炸|炮击|炮擊|入侵|攻入)[了]?\s*)$"#)
+private let conflictTargetPrefix = try! NSRegularExpression(pattern: #"(?i)\b(?:attacks?|attacked|bombs?|bombed|bombing|invades?|invaded|shells?|shelled|strikes?|struck|hits?|hit|targets?|targeted|(?:attacks?|airstrikes?|strikes?|assault|invasion)\s+on)\s+(?:(?:the|northern|southern|eastern|western|central|city|town|capital|of)\s+){0,4}$"#)
+private let conflictVictimSuffix = try! NSRegularExpression(pattern: #"(?i)^\s*(?:(?:['’]s\s+)?(?:capital|city|region|border)\s+)?(?:is\s+|was\s+|are\s+|were\s+)?(?:under attack|hit by|struck by|bombed|shelled|invaded)|^\s*(?:的)?(?:首都|北部|南部|东部|東部|西部|境内|境內|多地|地区|地區|边境|邊境)?(?:发生|發生|遭到|遭|爆发|爆發|遇袭|遇襲)"#)
+private let conflictEventPattern = try! NSRegularExpression(pattern: #"(?i)\b(?:airstrikes?|missiles?|shelling|bombing|bombed|invasion|invades?|invaded|massacre|fighting|clashes|offensive|hostages?|attacks?|attacked|strikes?|struck)\b|空袭|空襲|导弹|導彈|炮击|炮擊|轰炸|轟炸|交火|冲突|衝突|入侵|袭击|襲擊"#)
+private let forceModifier = try! NSRegularExpression(pattern: #"(?i)^\s+(?:missile|drone|military|airstrike|attack|troops|army|forces|soldiers)\b"#)
+private let unrealizedAttack = try! NSRegularExpression(pattern: #"(?i)\b(?:halts?|stops?|suspends?|pauses?|plans? to|threatens? to|prepares? to)\s+(?:(?:missile|drone|military)\s+)?(?:attacks?|airstrikes?|strikes?|bomb|invade)\b|(?:暂停|暫停|停止|不再|计划|計劃|威胁|威脅).{0,6}(?:袭击|襲擊|空袭|空襲|轰炸|轟炸|入侵)"#)
+
+func conflictLocations(_ title: String) -> [String] {
+    let range = NSRange(title.startIndex..., in: title)
+    guard unrealizedAttack.firstMatch(in: title, range: range) == nil else { return [] }
+    let casualtiesInConflict = casualtyPattern.firstMatch(in: title, range: range) != nil && conflictWeight(title) > 0
+    guard conflictEventPattern.firstMatch(in: title, range: range) != nil || casualtiesInConflict else { return [] }
+    func matches(_ regex: NSRegularExpression, _ text: String) -> Bool {
+        regex.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)) != nil
+    }
+    // ponytail: title-only location cues favor precision; unresolved geography contributes no color.
+    return countryMatchers.compactMap { country, regex in
+        let located = regex.matches(in: title, range: range).contains { match in
+            guard let span = Range(match.range, in: title) else { return false }
+            let before = String(title[..<span.lowerBound].suffix(80))
+            let after = String(title[span.upperBound...].prefix(60))
+            let name = title[span].lowercased()
+            if ["russian", "ukrainian", "israeli", "iranian", "us", "u.s.", "british"].contains(name), matches(forceModifier, after) { return false }
+            return matches(conflictLocationPrefix, before) || matches(conflictTargetPrefix, before) || matches(conflictVictimSuffix, after)
+        }
+        return located ? country.id : nil
+    }
 }
 
 func conflictSignals(_ events: [WorldEvent], now: Date = Date()) -> [ConflictSignal] {
@@ -287,17 +331,14 @@ func conflictSignals(_ events: [WorldEvent], now: Date = Date()) -> [ConflictSig
               date <= now, date >= now.addingTimeInterval(-48 * 3600) else { return nil }
         let weight = conflictWeight(event.title)
         guard weight > 0 else { return nil }
-        let range = NSRange(event.title.startIndex..., in: event.title)
-        let countries = countryMatchers.compactMap { country, regex in
-            regex.firstMatch(in: event.title, range: range) == nil ? nil : country.id
-        }
-        return countries.isEmpty ? nil : ConflictSignal(id: event.id, sourceID: event.sourceID, date: date, weight: weight, countries: countries)
+        let countries = conflictLocations(event.title)
+        return countries.isEmpty ? nil : ConflictSignal(id: event.id, sourceID: event.sourceID, date: date, weight: weight, countries: countries, attributionVersion: 2)
     }
 }
 
 func mergedConflictSignals(_ old: [ConflictSignal], _ new: [ConflictSignal], enabledIDs: [String], now: Date = Date()) -> [ConflictSignal] {
     var byID: [String: ConflictSignal] = [:]
-    for signal in old + new where enabledIDs.contains(signal.sourceID) && signal.date <= now && signal.date >= now.addingTimeInterval(-48 * 3600) {
+    for signal in old + new where signal.attributionVersion == 2 && enabledIDs.contains(signal.sourceID) && signal.date <= now && signal.date >= now.addingTimeInterval(-48 * 3600) {
         byID[signal.id] = signal
     }
     // ponytail: retain at most 100 small, title-free observations; older signals expire after 48 hours.
@@ -306,7 +347,7 @@ func mergedConflictSignals(_ old: [ConflictSignal], _ new: [ConflictSignal], ena
 
 func mapConflicts(signals: [ConflictSignal], now: Date = Date()) -> [MapConflict] {
     var scores: [String: Int] = [:]
-    for signal in signals where signal.date <= now && signal.date >= now.addingTimeInterval(-48 * 3600) {
+    for signal in signals where signal.attributionVersion == 2 && signal.date <= now && signal.date >= now.addingTimeInterval(-48 * 3600) {
         for id in signal.countries { scores[id, default: 0] += signal.weight }
     }
     return scores.compactMap { id, score in conflictLevel(score) == 0 ? nil : MapConflict(countryID: id, score: score) }

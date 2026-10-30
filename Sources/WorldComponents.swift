@@ -19,6 +19,7 @@ let cameraAccents: [Color] = [Color(red: 0.25, green: 0.62, blue: 1.0), Color(re
                               Color(red: 0.69, green: 0.45, blue: 1.0), Color(red: 1.0, green: 0.42, blue: 0.7)]
 
 struct WorldMapCanvas: View {
+    @Environment(\.colorScheme) private var colorScheme
     let markers: [MapMarker]
     let conflicts: [MapConflict]
     let sun: MapCoordinate
@@ -33,6 +34,7 @@ struct WorldMapCanvas: View {
             guard size.width > 0, size.height > 0 else { return }
             let projection = MapProjection(bounds: settings.region.bounds, size: size)
             let frame = CGRect(origin: .zero, size: size)
+            var boundaries = Path()
             for country in WorldMap.countries where country.id != "ATA" {
                 var path = Path()
                 for ring in country.rings where !ring.isEmpty {
@@ -57,11 +59,12 @@ struct WorldMapCanvas: View {
                 }
                 context.fill(path, with: .color(Color.primary.opacity(0.10)), style: FillStyle(eoFill: true))
                 if settings.conflicts, let conflict = conflicts.first(where: { $0.countryID == country.id }), conflict.level > 0 {
-                    context.fill(path, with: .color(.red.opacity([0.16, 0.30, 0.46, 0.64][conflict.level - 1])), style: FillStyle(eoFill: true))
-                    if conflict.level >= 3 { context.stroke(path, with: .color(.red.opacity(0.55)), lineWidth: 0.6) }
+                    context.fill(path, with: .color(.red.opacity([0.14, 0.25, 0.38, 0.52][conflict.level - 1])), style: FillStyle(eoFill: true))
+                    if conflict.level >= 3 { context.stroke(path, with: .color(.red.opacity(0.42)), lineWidth: 0.55) }
                 }
-                context.stroke(path, with: .color(Color.primary.opacity(0.18)), lineWidth: 0.5)
+                boundaries.addPath(path)
             }
+            context.stroke(boundaries, with: .color(Color.primary.opacity(0.16)), lineWidth: 0.45)
             if settings.night {
                 // Shade the full frame height so the night side has no hard edge where the land data ends.
                 let south = max(-90, projection.bounds.south), north = min(90, projection.bounds.north)
@@ -78,7 +81,7 @@ struct WorldMapCanvas: View {
                     }
                     night.addLine(to: projection.point(.init(longitude: projection.bounds.east, latitude: edge)))
                     night.closeSubpath()
-                    context.fill(night, with: .color(.black.opacity(0.22)))
+                    context.fill(night, with: .color(.black.opacity(colorScheme == .dark ? 0.18 : 0.08)))
                 }
             }
             let labels: [MapLabel] = []
@@ -135,7 +138,7 @@ struct WorldMapCanvas: View {
             }
             for item in mapLabels(projection: projection, reserved: labels + obstacles.map { MapLabel(countryID: "obstacle", text: "", rect: $0) }) where !item.text.isEmpty {
                 let dynamic = ["iss", "cyclone", "event"].contains(item.countryID) || item.countryID.hasPrefix("city:")
-                let text = Text(item.text).font(.system(size: 9, weight: .semibold)).foregroundColor(dynamic ? .primary : .secondary)
+                let text = Text(item.text).font(.system(size: 9.5, weight: .semibold)).foregroundColor(dynamic ? .primary : .primary.opacity(0.72))
                 if dynamic {
                     context.fill(Path(roundedRect: item.rect, cornerRadius: 2), with: .color(Color(nsColor: .windowBackgroundColor).opacity(0.82)))
                 }
