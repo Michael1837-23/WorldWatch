@@ -91,8 +91,8 @@ actor TitleTranslator {
         return applyCache(to: events)
     }
     /// Drops translations for headlines no longer in any cached feed, so the cache file stays bounded.
-    func prune(keeping titles: Set<String>, threshold: Int = 1500) {
-        guard translations.count > threshold, !titles.isEmpty else { return }
+    func prune(keeping titles: Set<String>, threshold: Int = retainedNewsLimit) {
+        guard translations.count > threshold else { return }
         translations = translations.filter { titles.contains($0.key) }
         try? save()
     }

@@ -289,6 +289,23 @@ import UniformTypeIdentifiers
         assert(capped.prefix(3).map(\.id) == ["cn0", "world-a", "world-b"])
         assert(balancedByOrigin(mergedEvents(domesticFlood, now: now), ratio: nil).prefix(3).allSatisfy(\.isDomestic), "不限时保持纯时间顺序")
         print("PASS: 国内新闻占比上限、最新置顶、旧条目顺次下移、无新增不轮换、模式切换与兼容、小尺寸最新显示")
+        let recentNews = (0..<160).map { index in
+            headline("limited-\(index)", "News item \(index)", index.isMultiple(of: 2) ? "bbc" : "guardian", Double(index))
+        }
+        let limited = limitedSourceFeeds([
+            "bbc": SourceSnapshot(events: recentNews.filter { $0.sourceID == "bbc" }, fetchedAt: now),
+            "guardian": SourceSnapshot(events: recentNews.filter { $0.sourceID == "guardian" }, fetchedAt: now),
+            "empty": SourceSnapshot(events: [], fetchedAt: now)
+        ])
+        let retained = mergedEvents(limited.values.flatMap(\.events), now: now)
+        assert(retained.map(\.id) == recentNews.prefix(100).map(\.id), "所有来源合计只保留最新 100 条")
+        assert(limited["empty"]?.events.isEmpty == true && limited["bbc"]?.fetchedAt == now, "保留空来源和检查时间")
+        let limitedSnapshot = refreshedSnapshot(previous: nil, results: [
+            .init(id: "bbc", events: recentNews.filter { $0.sourceID == "bbc" }),
+            .init(id: "guardian", events: recentNews.filter { $0.sourceID == "guardian" })
+        ], now: now, enabledIDs: ["bbc", "guardian"])
+        assert(limitedSnapshot.sourceFeeds?.values.reduce(0, { $0 + $1.events.count }) == 100, "组件联网更新也遵守总量上限")
+        print("PASS: 多来源缓存及组件摘要合计保留最新 100 条，来源状态不丢失")
         assert(widgetReloadDelay(last: now, now: now.addingTimeInterval(5), newsChanged: true) == 10)
         assert(widgetReloadDelay(last: now, now: now.addingTimeInterval(5), newsChanged: false) == 50)
         assert(widgetReloadDelay(last: now, now: now.addingTimeInterval(16), newsChanged: true) == 0)

@@ -219,6 +219,25 @@ struct SourceFetchResult: Sendable {
     var fetchedAt: Date? = nil
 }
 
+let retainedNewsLimit = 100
+
+func limitedSourceFeeds(_ feeds: [String: SourceSnapshot]) -> [String: SourceSnapshot] {
+    let latest = feeds.flatMap { id, feed in feed.events.map { (id, $0) } }.sorted {
+        let first = $0.1.date ?? .distantPast, second = $1.1.date ?? .distantPast
+        if first != second { return first > second }
+        if $0.1.id != $1.1.id { return $0.1.id < $1.1.id }
+        return $0.0 < $1.0
+    }.prefix(retainedNewsLimit)
+    let grouped = Dictionary(grouping: latest, by: { $0.0 })
+    return feeds.mapValues { feed in
+        var result = feed
+        result.events = []
+        return result
+    }.merging(grouped.mapValues { items in
+        SourceSnapshot(events: items.map { $0.1 }, fetchedAt: feeds[items[0].0]!.fetchedAt)
+    }) { _, selected in selected }
+}
+
 func digestTopic(_ event: WorldEvent) -> String? {
     let title = event.title.lowercased()
     guard title.range(of: #"\b(elections?|polls|vot(e|es|ing)|turnout|runoff)\b|选举|選舉|大选|大選"#, options: .regularExpression) != nil else { return nil }
@@ -426,6 +445,7 @@ func refreshedSnapshot(previous: NewsSnapshot?, results: [SourceFetchResult], no
             successful += 1
         }
     }
+    feeds = limitedSourceFeeds(feeds)
     let mode = mode ?? previous?.displayMode ?? .latest
     let pool = displayPool(feeds.values.flatMap(\.events), mode: mode, now: now)
     let selected = Array(pool.prefix(4))

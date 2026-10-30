@@ -51,8 +51,15 @@ struct CachedFeed: Codable {
             UserDefaults.standard.set(60.0, forKey: "refreshInterval")
             UserDefaults.standard.set(true, forKey: "expandedNewsV22")
         }
-        if let data = try? Data(contentsOf: cacheURL), let cache = try? JSONDecoder().decode([String: CachedFeed].self, from: data) { feeds = cache }
+        if let data = try? Data(contentsOf: cacheURL), let cache = try? JSONDecoder().decode([String: CachedFeed].self, from: data) {
+            feeds = limitedCachedFeeds(cache)
+            persistFeeds()
+        }
         readCameras()
+    }
+    private func limitedCachedFeeds(_ cached: [String: CachedFeed]) -> [String: CachedFeed] {
+        let snapshots = cached.filter { !disabled.contains($0.key) }.mapValues { SourceSnapshot(events: $0.events, fetchedAt: $0.fetched) }
+        return limitedSourceFeeds(snapshots).mapValues { CachedFeed(events: $0.events, fetched: $0.fetchedAt) }
     }
     func start() {
         loop?.cancel()
@@ -258,9 +265,11 @@ struct CachedFeed: Codable {
             for await (id, items, error) in group {
                 if let items {
                     let cached = await TitleTranslator.shared.applyCache(to: items)
-                    let previous = feeds[id]?.events ?? []
-                    let changed = !sameRenderedNews(previous, cached) || mapMarkers(previous) != mapMarkers(cached)
-                    feeds[id] = CachedFeed(events: cached, fetched: Date()); errors.removeValue(forKey: id)
+                    let previous = events
+                    var updated = feeds
+                    updated[id] = CachedFeed(events: cached, fetched: Date())
+                    feeds = limitedCachedFeeds(updated); errors.removeValue(forKey: id)
+                    let changed = !sameRenderedNews(previous, events) || mapMarkers(previous) != mapMarkers(events)
                     if changed { scheduleIncrementalSnapshot() }
                 }
                 else if let error { errors[id] = error }
@@ -472,7 +481,7 @@ struct WorldView: View {
                 else if store.healthyCount == 0 { Label("暂时无法连接", systemImage: "wifi.exclamationmark") }
                 else { Label("暂无报道", systemImage: "globe.asia.australia") }
             } description: {
-                Text(store.newsFilter.mode == .personal ? "请调整新闻过滤设置。" : store.enabledSources.isEmpty ? "在设置中启用至少一个来源。" : store.healthyCount == 0 && !store.refreshing ? "请检查网络后重试。" : "新闻保留三天，灾害保留七天。")
+                Text(store.newsFilter.mode == .personal ? "请调整新闻过滤设置。" : store.enabledSources.isEmpty ? "在设置中启用至少一个来源。" : store.healthyCount == 0 && !store.refreshing ? "请检查网络后重试。" : "最多保留最新 100 条；新闻最长三天，灾害最长七天。")
             } actions: {
                 if store.newsFilter.mode == .personal { Button("调整过滤") { store.showSources = true } }
                 else if store.enabledSources.isEmpty { Button("打开设置") { store.showSources = true } }
@@ -482,13 +491,13 @@ struct WorldView: View {
         } else {
             ScrollView {
                 LazyVStack(spacing: 2) {
-                    ForEach(rows.prefix(200)) { event in
+                    ForEach(rows.prefix(retainedNewsLimit)) { event in
                         EventRow(event: event)
                             .transition(reduceMotion ? .opacity : .asymmetric(insertion: .move(edge: .top).combined(with: .opacity), removal: .opacity))
                     }
                 }
                 .padding(.horizontal, 10).padding(.vertical, 8)
-                .animation(reduceMotion ? .easeOut(duration: 0.15) : .spring(response: 0.48, dampingFraction: 0.92), value: Array(rows.prefix(200).map(\.id)))
+                .animation(reduceMotion ? .easeOut(duration: 0.15) : .spring(response: 0.48, dampingFraction: 0.92), value: Array(rows.prefix(retainedNewsLimit).map(\.id)))
             }
             .clipped()
         }
@@ -722,7 +731,7 @@ struct SettingsView: View {
                         }
                     }
                 } header: { Text("来源") } footer: {
-                    Text("新闻保留三天，灾害保留七天。小组件的实际刷新时刻由 macOS 决定。停止抓取会同时影响地图；只想不显示某个来源请用「新闻过滤」。").foregroundStyle(.secondary)
+                    Text("最多保留最新 100 条；新闻最长三天，灾害最长七天。小组件的实际刷新时刻由 macOS 决定。停止抓取会同时影响地图；只想不显示某个来源请用「新闻过滤」。").foregroundStyle(.secondary)
                 }
             }
             .formStyle(.grouped)
@@ -857,7 +866,7 @@ struct SettingsView: View {
 @main struct WorldWatchMain {
     @MainActor static func main() {
         let application = NSApplication.shared
-        application.setActivationPolicy(.regular)
+        application.setActivationPolicy(.accessory)
         let delegate = AppDelegate()
         application.delegate = delegate
         withExtendedLifetime(delegate) { application.run() }
