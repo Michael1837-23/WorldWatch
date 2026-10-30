@@ -248,7 +248,7 @@ struct WorldComponentProvider: TimelineProvider {
             let latest = newerSnapshot(refreshedSnapshot, NewsSnapshotStore.shared.read())
             let timeline = entries(snapshot: latest)
             let kind = news ? (cameras ? "WorldWatchDashboard" : "WorldWatchMap") : "WorldWatchLive"
-            NSLog("新组件时间线：%@ family=%@ entries=%ld", kind, String(describing: context.family), timeline.count)
+            NSLog("新组件时间线：%@ family=%@ entries=%ld hotspots=%ld", kind, String(describing: context.family), timeline.count, timeline.first?.conflicts.count ?? 0)
             completion(Timeline(entries: timeline, policy: .after(Date().addingTimeInterval(900))))
         }
     }
@@ -360,7 +360,7 @@ struct WorldLiveWidget: Widget {
 
 @main struct WorldWatchWidgets: WidgetBundle {
     init() {
-        NSLog("世界动态组件目录 2.8/23：WorldWatchNews、WorldWatchDashboard、WorldWatchMap、WorldWatchLive")
+        NSLog("世界动态组件目录 2.8/24：WorldWatchNews、WorldWatchDashboard、WorldWatchMap、WorldWatchLive")
     }
     var body: some Widget {
         WorldWatchWidget()

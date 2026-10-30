@@ -35,6 +35,7 @@ struct WorldMapCanvas: View {
             let projection = MapProjection(bounds: settings.region.bounds, size: size)
             let frame = CGRect(origin: .zero, size: size)
             var boundaries = Path()
+            var conflictAreas: [(Path, Int)] = []
             for country in WorldMap.countries where country.id != "ATA" {
                 var path = Path()
                 for ring in country.rings where !ring.isEmpty {
@@ -59,12 +60,10 @@ struct WorldMapCanvas: View {
                 }
                 context.fill(path, with: .color(Color.primary.opacity(0.10)), style: FillStyle(eoFill: true))
                 if settings.conflicts, let conflict = conflicts.first(where: { $0.countryID == country.id }), conflict.level > 0 {
-                    context.fill(path, with: .color(.red.opacity([0.14, 0.25, 0.38, 0.52][conflict.level - 1])), style: FillStyle(eoFill: true))
-                    if conflict.level >= 3 { context.stroke(path, with: .color(.red.opacity(0.42)), lineWidth: 0.55) }
+                    conflictAreas.append((path, conflict.level))
                 }
                 boundaries.addPath(path)
             }
-            context.stroke(boundaries, with: .color(Color.primary.opacity(0.16)), lineWidth: 0.45)
             if settings.night {
                 // Shade the full frame height so the night side has no hard edge where the land data ends.
                 let south = max(-90, projection.bounds.south), north = min(90, projection.bounds.north)
@@ -84,6 +83,12 @@ struct WorldMapCanvas: View {
                     context.fill(night, with: .color(.black.opacity(colorScheme == .dark ? 0.18 : 0.08)))
                 }
             }
+            // Alert colors stay above the night shade so low-level hotspots remain visible.
+            for (path, level) in conflictAreas {
+                context.fill(path, with: .color(.red.opacity([0.34, 0.50, 0.66, 0.80][level - 1])), style: FillStyle(eoFill: true))
+                context.stroke(path, with: .color(.red.opacity(0.72)), lineWidth: level >= 3 ? 0.8 : 0.6)
+            }
+            context.stroke(boundaries, with: .color(Color.primary.opacity(0.16)), lineWidth: 0.45)
             let labels: [MapLabel] = []
             let visibleMarkers = markers.filter { $0.earthquake ? settings.earthquakes : settings.disasters }
             let visibleCyclones = settings.cyclones ? cyclones : []
