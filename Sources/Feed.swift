@@ -111,6 +111,8 @@ struct NewsFilter: Codable, Equatable, Sendable {
     var followed: [String] = []
     var blocked: [String] = []
     var followOnly = false
+    var eventOnly: Bool? = nil
+    var eventsOnly: Bool { eventOnly ?? false }
 
     var cleaned: NewsFilter {
         var copy = self
@@ -125,6 +127,27 @@ struct NewsFilter: Codable, Equatable, Sendable {
     static var selected: NewsFilter {
         get { read(from: WorldPreferences.shared) }
         set { if let data = try? JSONEncoder().encode(newValue.cleaned) { WorldPreferences.shared.set(data, forKey: "newsFilter") } }
+    }
+}
+
+// ponytail: headline patterns cannot determine intent perfectly; refine using real false positives.
+private let nonEventHeadlinePatterns = [
+    #"^\s*(?:opinion|analysis|commentary|interview|profile|explainer|podcast|review)\s*[:：–—-]"#,
+    #"\b(?:i|i'm|i've|my|me|we|our)\b.{0,100}\s[-–—]\s"#,
+    #"\b(?:review|opinion|commentary)\s*[–—-]|\|\s*[^|]{3,40}$|\bin pictures\s*$|^\s*(?:tv tonight|friday briefing)\s*[:：]"#,
+    #"^\s*(?:专访|访谈|人物|人物志|评论|观点|专栏|解读|观察|盘点|揭秘|如何|为何|为什么|什么是|一文读懂)"#,
+    #"(?:人物专访|深度访谈|独家专访|破局之道|从来没有像我这样的人)"#,
+    #"^\s*[^：:]{1,12}(?:印象|观察)[：:]|^\s*[（(]乡村行|[？?]\s*$"#
+].compactMap { try? NSRegularExpression(pattern: $0, options: .caseInsensitive) }
+private let explanatoryQuestion = try! NSRegularExpression(pattern: #"(?:^|[.!?]\s+)\s*(?:how|why|what|who|where)\b"#, options: .caseInsensitive)
+private let reportedAction = try! NSRegularExpression(pattern: #"\b(?:killed|injured|wounded|attacked|bombed|arrested|strikes|airstrikes|forced to flee)\b"#, options: .caseInsensitive)
+
+func isNonEventHeadline(_ event: WorldEvent) -> Bool {
+    guard !event.disaster else { return false }
+    return [event.title, event.translatedTitle].compactMap { $0 }.contains { title in
+        let range = NSRange(title.startIndex..., in: title)
+        if nonEventHeadlinePatterns.contains(where: { $0.firstMatch(in: title, range: range) != nil }) { return true }
+        return explanatoryQuestion.firstMatch(in: title, range: range) != nil && reportedAction.firstMatch(in: title, range: range) == nil
     }
 }
 
@@ -156,10 +179,11 @@ private struct NewsFilterMatcher {
         blocked = KeywordMatcher(filter.blocked)
     }
     func allows(_ event: WorldEvent) -> Bool {
-        guard filter.mode == .personal else { return true }
+        if filter.mode != .personal { return !filter.eventsOnly || !isNonEventHeadline(event) }
         let titles = followed.isEmpty && blocked.isEmpty ? [] : [event.title, event.translatedTitle].compactMap { $0 }.map(normalizedKeyword)
         if titles.contains(where: blocked.matches) { return false }
         let matchesFollowed = titles.contains(where: followed.matches)
+        if filter.eventsOnly && !matchesFollowed && isNonEventHeadline(event) { return false }
         if filter.followOnly { return matchesFollowed }
         return matchesFollowed || (!filter.excludedCategories.contains(event.category.rawValue) && !filter.excludedSources.contains(event.sourceID))
     }
@@ -170,7 +194,7 @@ func newsFilterAllows(_ event: WorldEvent, filter: NewsFilter) -> Bool {
 }
 
 func applyNewsFilter(_ events: [WorldEvent], filter: NewsFilter) -> [WorldEvent] {
-    guard filter.mode == .personal else { return events }
+    guard filter.mode == .personal || filter.eventsOnly else { return events }
     let matcher = NewsFilterMatcher(filter)
     return events.filter(matcher.allows)
 }
@@ -383,14 +407,14 @@ func widgetTimeline(_ snapshot: NewsSnapshot, now: Date = Date(), pageSize: Int 
     if snapshot.mode == .rotation {
         var rotating = snapshot
         rotating.rotationEvents = digestPool(all, now: now, filter: filter)
-        if filter.mode == .personal && rotating.rotationEvents?.isEmpty == true { rotating.note = "没有符合个性设置的新闻" }
+        if (filter.mode == .personal || filter.eventsOnly) && rotating.rotationEvents?.isEmpty == true { rotating.note = filter.mode == .personal ? "没有符合个性设置的新闻" : "没有符合过滤条件的新闻" }
         return rotationTimeline(rotating, now: now, pageSize: pageSize)
     }
     var entry = snapshot
     entry.checkedAt = snapshot.checkDate
     entry.date = now
     entry.events = latestEvents(all, limit: pageSize, now: now, filter: filter)
-    if filter.mode == .personal && entry.events.isEmpty { entry.note = "没有符合个性设置的新闻" }
+    if (filter.mode == .personal || filter.eventsOnly) && entry.events.isEmpty { entry.note = filter.mode == .personal ? "没有符合个性设置的新闻" : "没有符合过滤条件的新闻" }
     entry.rotationEvents = nil
     entry.rotationPage = nil; entry.rotationPageCount = nil
     entry.sourceFeeds = snapshot.sourceFeeds?.mapValues { SourceSnapshot(events: [], fetchedAt: $0.fetchedAt) }

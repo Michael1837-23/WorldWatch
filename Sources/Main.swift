@@ -46,6 +46,10 @@ struct CachedFeed: Codable {
     private let cacheURL = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("WorldWatch/feeds.json")
     init() {
         filter = widgetDisplayMode == .latest ? "最新" : "综合"
+        if newsFilter.eventOnly == nil {
+            newsFilter.eventOnly = true
+            NewsFilter.selected = newsFilter
+        }
         if !UserDefaults.standard.bool(forKey: "expandedNewsV22") {
             interval = 60
             UserDefaults.standard.set(60.0, forKey: "refreshInterval")
@@ -332,13 +336,13 @@ struct EventRow: View {
             VStack(alignment: .leading, spacing: 4) {
                 HStack(spacing: 6) {
                     Text(event.sourceName).fontWeight(.semibold).foregroundStyle(.secondary)
+                    if let date = event.date {
+                        Text((event.timeKind == "发生" ? "发生 " : "") + shortTimeLabel(date)).monospacedDigit().foregroundStyle(.tertiary)
+                    }
                     if let severity = event.severity {
                         Text(severity).fontWeight(.medium).foregroundStyle(severity == "红色预警" ? Color.red : Color.orange)
                     }
                     Spacer(minLength: 8)
-                    if let date = event.date {
-                        Text((event.timeKind == "发生" ? "发生 " : "") + shortTimeLabel(date)).monospacedDigit().foregroundStyle(.tertiary)
-                    }
                 }
                 .font(.system(size: 11)).lineLimit(1)
                 Text(event.displayTitle)
@@ -366,7 +370,7 @@ struct WorldView: View {
     var rows: [WorldEvent] {
         let raw = store.enabledSources.flatMap { store.feeds[$0.id]?.events ?? [] }
         let personal = store.newsFilter.mode == .personal
-        let events = personal ? uniqueNewsEvents(applyNewsFilter(raw, filter: store.newsFilter), mergeTopics: false, now: store.rotationDate) : store.events
+        let events = personal || store.newsFilter.eventsOnly ? uniqueNewsEvents(applyNewsFilter(raw, filter: store.newsFilter), mergeTopics: false, now: store.rotationDate) : store.events
         if store.filter == "综合" {
             let pool = digestPool(raw, now: store.rotationDate, filter: store.newsFilter)
             let page = rotationEvents(pool, at: store.rotationDate).events
@@ -475,15 +479,15 @@ struct WorldView: View {
             }
         } else if rows.isEmpty {
             ContentUnavailableView {
-                if store.newsFilter.mode == .personal { Label("没有符合条件的新闻", systemImage: "line.3.horizontal.decrease.circle") }
+                if store.newsFilter.mode == .personal || store.newsFilter.eventsOnly { Label("没有符合条件的新闻", systemImage: "line.3.horizontal.decrease.circle") }
                 else if store.refreshing { Label("正在获取新闻", systemImage: "antenna.radiowaves.left.and.right") }
                 else if store.enabledSources.isEmpty { Label("尚未选择来源", systemImage: "newspaper") }
                 else if store.healthyCount == 0 { Label("暂时无法连接", systemImage: "wifi.exclamationmark") }
                 else { Label("暂无报道", systemImage: "globe.asia.australia") }
             } description: {
-                Text(store.newsFilter.mode == .personal ? "请调整新闻过滤设置。" : store.enabledSources.isEmpty ? "在设置中启用至少一个来源。" : store.healthyCount == 0 && !store.refreshing ? "请检查网络后重试。" : "最多保留最新 100 条；新闻最长三天，灾害最长七天。")
+                Text(store.newsFilter.mode == .personal || store.newsFilter.eventsOnly ? "请调整新闻过滤设置。" : store.enabledSources.isEmpty ? "在设置中启用至少一个来源。" : store.healthyCount == 0 && !store.refreshing ? "请检查网络后重试。" : "最多保留最新 100 条；新闻最长三天，灾害最长七天。")
             } actions: {
-                if store.newsFilter.mode == .personal { Button("调整过滤") { store.showSources = true } }
+                if store.newsFilter.mode == .personal || store.newsFilter.eventsOnly { Button("调整过滤") { store.showSources = true } }
                 else if store.enabledSources.isEmpty { Button("打开设置") { store.showSources = true } }
                 else if !store.refreshing { Button("重新连接") { Task { await store.refresh() } } }
             }
@@ -601,6 +605,7 @@ struct NewsFilterSection: View {
                 ForEach(NewsFilterMode.allCases, id: \.self) { Text($0.title).tag($0) }
             }
             .pickerStyle(.segmented)
+            Toggle("只看事件类新闻", isOn: Binding(get: { store.newsFilter.eventsOnly }, set: { on in update { $0.eventOnly = on } }))
             if store.newsFilter.mode == .personal {
                 VStack(alignment: .leading, spacing: 8) {
                     Text("领域").fontWeight(.medium)
@@ -638,7 +643,7 @@ struct NewsFilterSection: View {
                 keywordEditor("屏蔽关键词", followed: false)
             }
         } header: { Text("新闻过滤") } footer: {
-            Text("关注关键词会让对应新闻始终显示；屏蔽关键词优先级最高。过滤只影响新闻列表和新闻组件，不影响地图。")
+            Text("事件过滤按标题识别访谈、评论和介绍，可能有误判；关注关键词可保留匹配报道，屏蔽关键词优先。过滤不影响地图。")
                 .foregroundStyle(.secondary)
         }
     }
