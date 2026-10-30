@@ -82,7 +82,7 @@ struct CachedFeed: Codable {
         mapLoop?.cancel()
         mapLoop = Task {
             while !Task.isCancelled {
-                if await MapLayerService.shared.refresh(cities: selectedCities) { requestWidgetReload() }
+                if await MapLayerService.shared.refresh(cities: selectedCities) { objectWillChange.send(); requestWidgetReload() }
                 do { try await Task.sleep(nanoseconds: 300 * 1_000_000_000) } catch { return }
             }
         }
@@ -691,7 +691,7 @@ struct SettingsView: View {
                     ForEach([("mapEarthquakes", "地震", "USGS，24 小时内 M6.0 及以上"),
                              ("mapCyclones", "台风", "GDACS，仅显示仍活跃的气旋；虚线为约未来 12 小时路径"),
                              ("mapDisasters", "洪水与火山", "GDACS，进行中或 3 天内的红／橙预警"),
-                             ("mapConflicts", "冲突板块", "按 48 小时新闻中冲突类报道的数量与严重程度估计，颜色越深越严重；非核实的冲突数据"),
+                             ("mapConflicts", "持续冲突地区", "UCDP 月度有组织暴力记录为底图，叠加近 48 小时新闻；最多显示 15 国"),
                              ("mapNight", "昼夜分界", "按条目时间在本地计算"),
                              ("mapISS", "国际空间站", "wheretheiss.at，按条目时间估算位置")], id: \.0) { key, label, detail in
                         Toggle(isOn: Binding(get: { WorldPreferences.enabled(key) }, set: { store.setMapLayer(key, enabled: $0) })) {
@@ -701,6 +701,12 @@ struct SettingsView: View {
                             }
                         }
                     }
+                    let baseline = MapLayerStore.shared.ongoing()
+                    LabeledContent("冲突数据月份", value: baseline.monthLabel + (baseline.isRecent(at: Date()) ? "（月度发布）" : "（已过期，暂停底图）"))
+                    Link("UCDP Candidate Events Dataset · CC BY 4.0", destination: OngoingConflictSnapshot.source)
+                        .font(.caption)
+                    Text("Hegre 等（2020）。颜色表示所在国有冲突活动，不代表全国都是战区或实时战线。数据存在发布滞后；深浅综合月度记录与新闻评分，由本应用分级。")
+                        .font(.caption).foregroundStyle(.secondary)
                 } header: { Text("世界地图") }
                 Section {
                     Picker("抓取间隔", selection: Binding(get: { store.cameraInterval }, set: { store.setCameraInterval($0) })) {

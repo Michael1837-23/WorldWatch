@@ -144,10 +144,17 @@ struct WorldMapCanvas: View {
                     context.fill(Path(ellipseIn: CGRect(x: center.x - radius, y: center.y - radius, width: radius * 2, height: radius * 2)), with: .color(color))
                 }
             }
-            for item in mapLabels(projection: projection, reserved: labels + obstacles.map { MapLabel(countryID: "obstacle", text: "", rect: $0) }) where !item.text.isEmpty {
-                let dynamic = ["iss", "cyclone", "event"].contains(item.countryID) || item.countryID.hasPrefix("city:")
+            for item in mapLabels(projection: projection, reserved: labels + obstacles.map { MapLabel(countryID: "obstacle", text: "", rect: $0) }, hotspots: settings.conflicts ? conflicts : []) where !item.text.isEmpty {
+                let hotspot = item.countryID.hasPrefix("hotspot:")
+                let dynamic = ["iss", "cyclone", "event"].contains(item.countryID) || item.countryID.hasPrefix("city:") || hotspot
                 let continent = item.countryID.hasPrefix("continent:")
                 let text = Text(item.text).font(.system(size: 9.5, weight: continent ? .medium : .semibold)).foregroundColor(dynamic ? .primary : .primary.opacity(continent ? 0.60 : 0.72))
+                if hotspot, let country = WorldMap.countries.first(where: { "hotspot:" + $0.id == item.countryID }) {
+                    let center = projection.visible(country.label)
+                    var leader = Path(); leader.move(to: center)
+                    leader.addLine(to: CGPoint(x: max(item.rect.minX, min(center.x, item.rect.maxX)), y: max(item.rect.minY, min(center.y, item.rect.maxY))))
+                    context.stroke(leader, with: .color(.red.opacity(0.65)), lineWidth: 0.65)
+                }
                 if dynamic {
                     context.fill(Path(roundedRect: item.rect, cornerRadius: 2), with: .color(Color(nsColor: .windowBackgroundColor).opacity(0.82)))
                 }
@@ -164,7 +171,7 @@ struct WorldMapCanvas: View {
         .clipped()
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("\(settings.region.rawValue)地图")
-        .accessibilityValue(settings.conflicts ? "按 48 小时新闻中冲突类报道的数量与严重程度估计，颜色越深越严重；非核实的冲突数据" : "国家边界和灾害位置")
+        .accessibilityValue(settings.conflicts ? "持续冲突按 UCDP 月度有组织暴力记录与近 48 小时新闻综合分级；整国显色不代表全国战区，非实时战线" : "国家边界和灾害位置")
     }
 }
 

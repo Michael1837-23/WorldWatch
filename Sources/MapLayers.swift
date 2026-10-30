@@ -1,6 +1,113 @@
 import Foundation
 import Darwin
 
+struct OngoingConflictCountry: Codable, Equatable, Sendable {
+    let countryID: String
+    var events: Int
+    var fatalities: Int
+    var level: Int { [1, 25, 250, 1000].filter { fatalities >= $0 }.count }
+}
+
+struct OngoingConflictSnapshot: Codable, Equatable, Sendable {
+    let version: String
+    let periodStart: Date
+    let periodEnd: Date
+    let countries: [OngoingConflictCountry]
+    static let source = URL(string: "https://ucdp.uu.se/downloads/index.html")!
+    static let citation = "UCDP Candidate Events Dataset · Hegre et al. (2020) · CC BY 4.0"
+    var monthLabel: String {
+        let format = DateFormatter(); format.dateFormat = "yyyy年M月"; format.timeZone = TimeZone(secondsFromGMT: 0)
+        return format.string(from: periodStart)
+    }
+    func isRecent(at date: Date) -> Bool { date >= periodEnd && date.timeIntervalSince(periodEnd) <= 120 * 86400 }
+    // Generated from UCDP's official monthly CSV; updated downloads replace this small offline seed.
+    static let initial = try! JSONDecoder().decode(Self.self, from: Data(bundledOngoingConflictJSON.utf8))
+}
+
+private let bundledOngoingConflictJSON = #"{"countries":[{"countryID":"UKR","events":238,"fatalities":6189},{"countryID":"YEM","events":188,"fatalities":1206},{"countryID":"PAK","events":121,"fatalities":603},{"countryID":"SOM","events":14,"fatalities":189},{"countryID":"ETH","events":27,"fatalities":179},{"countryID":"MMR","events":46,"fatalities":160},{"countryID":"SDN","events":32,"fatalities":159},{"countryID":"PSE","events":94,"fatalities":130},{"countryID":"MEX","events":52,"fatalities":72},{"countryID":"NGA","events":10,"fatalities":72},{"countryID":"MLI","events":16,"fatalities":70},{"countryID":"COD","events":13,"fatalities":62},{"countryID":"LBN","events":16,"fatalities":40},{"countryID":"RUS","events":11,"fatalities":30},{"countryID":"BFA","events":8,"fatalities":24},{"countryID":"CMR","events":12,"fatalities":20},{"countryID":"TCD","events":2,"fatalities":20},{"countryID":"HTI","events":4,"fatalities":13},{"countryID":"PHL","events":4,"fatalities":13},{"countryID":"MOZ","events":6,"fatalities":12},{"countryID":"AFG","events":3,"fatalities":11},{"countryID":"IRN","events":2,"fatalities":9},{"countryID":"IDN","events":2,"fatalities":7},{"countryID":"IRQ","events":3,"fatalities":5},{"countryID":"THA","events":2,"fatalities":4},{"countryID":"BRA","events":3,"fatalities":3},{"countryID":"IND","events":2,"fatalities":2},{"countryID":"CAF","events":1,"fatalities":1},{"countryID":"COL","events":1,"fatalities":1}],"periodEnd":812505600,"periodStart":809913600,"version":"26.0.9"}"#
+
+func latestOngoingConflictVersion(_ data: Data, now: Date = Date()) throws -> String {
+    guard let html = String(data: data, encoding: .utf8) else { throw FeedError.invalid }
+    let regex = try NSRegularExpression(pattern: #"GEDEvent_v(\d{2})_0_(\d{1,2})\.csv"#)
+    var calendar = Calendar(identifier: .gregorian); calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+    let choices: [(Int, Int)] = regex.matches(in: html, range: NSRange(html.startIndex..., in: html)).compactMap { match in
+        guard let y = Range(match.range(at: 1), in: html), let m = Range(match.range(at: 2), in: html),
+              let year = Int(html[y]), let month = Int(html[m]), (1...12).contains(month),
+              let start = calendar.date(from: DateComponents(year: 2000 + year, month: month, day: 1)),
+              let end = calendar.date(byAdding: .month, value: 1, to: start), end <= now else { return nil }
+        return (year, month)
+    }
+    guard let latest = choices.max(by: { $0.0 == $1.0 ? $0.1 < $1.1 : $0.0 < $1.0 }) else { throw FeedError.invalid }
+    return "\(latest.0).0.\(latest.1)"
+}
+
+func forEachConflictCSVRow(_ data: Data, visit: ([String]) throws -> Void) throws {
+    guard data.count <= 8_000_000 else { throw FeedError.invalid }
+    let bytes = Array(data)
+    var field: [UInt8] = [], row: [String] = [], quoted = false, closed = false, count = 0
+    var index = bytes.starts(with: [239, 187, 191]) ? 3 : 0
+    func endField() throws {
+        guard let value = String(bytes: field, encoding: .utf8) else { throw FeedError.invalid }
+        row.append(value); field.removeAll(keepingCapacity: true); closed = false
+    }
+    func endRow() throws {
+        try endField()
+        if !row.allSatisfy(\.isEmpty) { count += 1; guard count <= 50_000 else { throw FeedError.invalid }; try visit(row) }
+        row.removeAll(keepingCapacity: true)
+    }
+    while index < bytes.count {
+        let byte = bytes[index]
+        if quoted {
+            if byte == 34 {
+                if index + 1 < bytes.count, bytes[index + 1] == 34 { field.append(34); index += 1 }
+                else { quoted = false; closed = true }
+            } else { field.append(byte) }
+        } else if byte == 44 { try endField() }
+        else if byte == 10 || byte == 13 {
+            try endRow()
+            if byte == 13, index + 1 < bytes.count, bytes[index + 1] == 10 { index += 1 }
+        } else if byte == 34 {
+            guard field.isEmpty, !closed else { throw FeedError.invalid }; quoted = true
+        } else {
+            guard !closed else { throw FeedError.invalid }; field.append(byte)
+        }
+        index += 1
+    }
+    guard !quoted else { throw FeedError.invalid }
+    if !field.isEmpty || !row.isEmpty || closed { try endRow() }
+}
+
+func parseOngoingConflictCSV(_ data: Data, version: String, now: Date = Date()) throws -> OngoingConflictSnapshot {
+    let rawParts = version.split(separator: ".", omittingEmptySubsequences: false)
+    let parts = rawParts.compactMap { Int($0) }
+    var calendar = Calendar(identifier: .gregorian); calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+    guard rawParts.count == 3, parts.count == 3, parts[1] == 0, (20...99).contains(parts[0]), (1...12).contains(parts[2]),
+          let start = calendar.date(from: DateComponents(year: 2000 + parts[0], month: parts[2], day: 1)),
+          let end = calendar.date(byAdding: .month, value: 1, to: start), end <= now, now.timeIntervalSince(end) <= 120 * 86400 else { throw FeedError.invalid }
+    var header: [String] = [], columns: [String: Int] = [:], seen = Set<String>(), countries: [String: OngoingConflictCountry] = [:]
+    let required = ["id", "active_year", "code_status", "type_of_violence", "country", "adm_1", "best", "date_start", "date_end"]
+    try forEachConflictCSVRow(data) { row in
+        if header.isEmpty {
+            guard Set(row).count == row.count, required.allSatisfy(row.contains) else { throw FeedError.invalid }
+            header = row; columns = Dictionary(uniqueKeysWithValues: row.enumerated().map { ($0.element, $0.offset) }); return
+        }
+        guard row.count == header.count else { throw FeedError.invalid }
+        func value(_ key: String) -> String { row[columns[key]!] }
+        guard ["1", "true"].contains(value("active_year").lowercased()), value("code_status").lowercased() == "clear",
+              let kind = Int(value("type_of_violence")), (1...3).contains(kind),
+              let deaths = Int(value("best")), deaths > 0, deaths <= 1_000_000,
+              let first = parseDate(String(value("date_start").prefix(10)) + "T00:00:00Z"),
+              let last = parseDate(String(value("date_end").prefix(10)) + "T00:00:00Z"),
+              first >= start, last < end, first <= last,
+              let country = ongoingCountryID(value("country"), administration: value("adm_1")), seen.insert(value("id")).inserted else { return }
+        var record = countries[country] ?? OngoingConflictCountry(countryID: country, events: 0, fatalities: 0)
+        record.events += 1; record.fatalities += deaths; countries[country] = record
+    }
+    guard !countries.isEmpty else { throw FeedError.invalid }
+    return OngoingConflictSnapshot(version: version, periodStart: start, periodEnd: end,
+        countries: countries.values.sorted { $0.fatalities == $1.fatalities ? $0.countryID < $1.countryID : $0.fatalities > $1.fatalities })
+}
+
 struct CycloneEvent: Sendable {
     let id: Int
     let name: String
@@ -222,6 +329,11 @@ struct MapLayerStore: Sendable {
         return Array(cache.value.filter { $0.end >= date.addingTimeInterval(-18 * 3600) }.prefix(5))
     }
     func weather() -> [CityWeather] { read("weather", as: [CityWeather].self)?.value ?? [] }
+    func ongoing() -> OngoingConflictSnapshot {
+        let seed = OngoingConflictSnapshot.initial
+        guard let cache = read("ongoing-conflicts", as: OngoingConflictSnapshot.self), cache.value.periodEnd >= seed.periodEnd else { return seed }
+        return cache.value
+    }
     func station(at date: Date = Date()) -> [ISSPoint] { recentISSTrack(Array((read("iss", as: [ISSPoint].self)?.value ?? []).prefix(60)), at: date) }
 }
 
@@ -231,7 +343,7 @@ actor MapLayerService {
     private var running = false
     init(store: MapLayerStore = .shared) { self.store = store }
 
-    @discardableResult func refresh(cities: [CameraCity], minimumAge: TimeInterval = 1800, budget: TimeInterval = 90) async -> Bool {
+    @discardableResult func refresh(cities: [CameraCity], minimumAge: TimeInterval = 1800, budget: TimeInterval = 90, includeOngoing: Bool = true) async -> Bool {
         guard !running else { return false }
         try? FileManager.default.createDirectory(at: store.root, withIntermediateDirectories: true)
         let descriptor = open(store.root.appendingPathComponent(".refresh.lock").path, O_CREAT | O_RDWR, S_IRUSR | S_IWUSR)
@@ -243,8 +355,9 @@ actor MapLayerService {
         async let a = refreshCyclones(age: minimumAge, deadline: deadline, enabled: settings.cyclones)
         async let b = refreshWeather(cities: Array(cities.prefix(4)), age: minimumAge, deadline: deadline, enabled: settings.weather)
         async let c = refreshISS(age: minimumAge, deadline: deadline, enabled: settings.iss)
-        let changes = await (a, b, c)
-        return changes.0 || changes.1 || changes.2
+        async let d = refreshOngoing(deadline: deadline, enabled: settings.conflicts && includeOngoing && budget >= 30)
+        let changes = await (a, b, c, d)
+        return changes.0 || changes.1 || changes.2 || changes.3
     }
     private func request(_ url: URL, deadline: Date) async throws -> Data {
         for attempt in 0..<2 {
@@ -268,6 +381,31 @@ actor MapLayerService {
             }
         }
         throw URLError(.cannotConnectToHost)
+    }
+    private func refreshOngoing(deadline: Date, enabled: Bool) async -> Bool {
+        guard enabled else { return false }
+        let old = store.read("ongoing-conflicts", as: OngoingConflictSnapshot.self), now = Date()
+        if let old, now.timeIntervalSince(old.checkedAt) < 86400 { return false }
+        let previous = store.ongoing()
+        do {
+            let index = try await request(OngoingConflictSnapshot.source, deadline: deadline)
+            let version = try latestOngoingConflictVersion(index, now: now)
+            if version == previous.version {
+                try store.write(.init(checkedAt: now, fetchedAt: old?.fetchedAt ?? now, value: previous), name: "ongoing-conflicts")
+                return old == nil
+            }
+            let url = URL(string: "https://ucdp.uu.se/downloads/candidateged/GEDEvent_v\(version.replacingOccurrences(of: ".", with: "_")).csv")!
+            let data = try await request(url, deadline: deadline)
+            let snapshot = try parseOngoingConflictCSV(data, version: version, now: now)
+            guard snapshot.periodEnd > previous.periodEnd else { throw FeedError.invalid }
+            try store.write(.init(checkedAt: now, fetchedAt: now, value: snapshot), name: "ongoing-conflicts")
+            return true
+        } catch {
+            // Failed checks never erase the verified monthly baseline or reset its data month.
+            try? store.write(.init(checkedAt: now, fetchedAt: old?.fetchedAt ?? .distantPast, value: previous), name: "ongoing-conflicts")
+            NSLog("持续冲突数据检查失败，保留 %@：%@", previous.monthLabel, error.localizedDescription)
+            return false
+        }
     }
     private func refreshCyclones(age: TimeInterval, deadline: Date, enabled: Bool) async -> Bool {
         guard enabled else { return false }
@@ -326,6 +464,7 @@ actor MapLayerService {
 }
 
 private struct MapSettingsForFetch {
+    let conflicts = WorldPreferences.enabled("mapConflicts")
     let cyclones = WorldPreferences.enabled("mapCyclones")
     // City time and weather labels were removed from the map at the user's request; the map shows text-free markers.
     let weather = false

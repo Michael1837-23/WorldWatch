@@ -253,7 +253,7 @@ struct WorldComponentProvider: TimelineProvider {
         }
     }
     private func refreshLayers() async {
-        if news { _ = await MapLayerService.shared.refresh(cities: cameras ? CameraCity.selected : [], minimumAge: 3600, budget: 10) }
+        if news { _ = await MapLayerService.shared.refresh(cities: cameras ? CameraCity.selected : [], minimumAge: 3600, budget: 10, includeOngoing: false) }
     }
     private func refreshNews(_ snapshot: NewsSnapshot?) async -> NewsSnapshot? {
         if !news { return snapshot }
@@ -267,6 +267,7 @@ struct WorldComponentProvider: TimelineProvider {
         let all = snapshot?.sourceFeeds?.values.flatMap(\.events) ?? snapshot?.rotationEvents ?? snapshot?.events ?? []
         let retained = mergedEvents(all, now: now)
         let layers = MapLayerStore.shared
+        let ongoing = layers.ongoing()
         let station = layers.station(), weather = cameras ? layers.weather() : []
         let mode = NewsDisplayMode.selected
         let pool = displayPool(all, mode: mode, now: now, filter: filter)
@@ -276,7 +277,8 @@ struct WorldComponentProvider: TimelineProvider {
         return (0..<min(10, max(1, Int(Double(minutes * 60) / spacing)))).map { index in
             let date = index == 0 ? now : Date(timeIntervalSince1970: slot + Double(index) * spacing)
             let news = mode == .latest ? Array(pool.prefix(12)) : rotationEvents(pool, at: date, limit: 10).events
-            let conflicts = snapshot?.conflictSignals.map { mapConflicts(signals: $0, now: date) } ?? mapConflicts(retained, now: date)
+            let signals = snapshot?.conflictSignals ?? conflictSignals(retained, now: now)
+            let conflicts = mapConflicts(signals: signals, ongoing: ongoing, now: date)
             return WorldComponentEntry(date: date, events: news, note: (filter.mode == .personal || filter.eventsOnly) && news.isEmpty ? (filter.mode == .personal ? "没有符合个性设置的新闻" : "没有符合过滤条件的新闻") : nil, markers: mapMarkers(all, now: date), conflicts: conflicts,
                                        cyclones: layers.cyclones(at: date), weather: weather, station: station, sun: solarPosition(at: date),
                                        settings: settings, cities: cities, frames: frames, index: Int(date.timeIntervalSince1970 / spacing))
@@ -333,7 +335,7 @@ struct WorldDashboardWidget: Widget {
     var body: some WidgetConfiguration {
         StaticConfiguration(kind: kind, provider: WorldComponentProvider()) { WorldComponentView(entry: $0, kind: kind) }
             .configurationDisplayName("世界总览")
-            .description("世界地图、四座城市实景截图与新闻。冲突颜色按 48 小时新闻估计，非核实的冲突数据。")
+            .description("世界地图、四座城市实景截图与新闻。持续冲突使用 UCDP 月度记录并叠加近期新闻，非实时战线。")
             .supportedFamilies([.systemExtraLarge])
     }
 }
@@ -343,7 +345,7 @@ struct WorldMapWidget: Widget {
     var body: some WidgetConfiguration {
         StaticConfiguration(kind: kind, provider: WorldComponentProvider(cameras: false)) { WorldComponentView(entry: $0, kind: kind) }
             .configurationDisplayName("世界地图")
-            .description("国家、地震、灾害与昼夜。冲突颜色按 48 小时新闻估计，非核实的冲突数据。")
+            .description("国家、地震、灾害与昼夜。持续冲突使用 UCDP 月度记录并叠加近期新闻，非实时战线。")
             .supportedFamilies([.systemLarge, .systemExtraLarge])
     }
 }
@@ -360,7 +362,7 @@ struct WorldLiveWidget: Widget {
 
 @main struct WorldWatchWidgets: WidgetBundle {
     init() {
-        NSLog("世界动态组件目录 2.8/24：WorldWatchNews、WorldWatchDashboard、WorldWatchMap、WorldWatchLive")
+        NSLog("世界动态组件目录 2.8/25：WorldWatchNews、WorldWatchDashboard、WorldWatchMap、WorldWatchLive")
     }
     var body: some Widget {
         WorldWatchWidget()

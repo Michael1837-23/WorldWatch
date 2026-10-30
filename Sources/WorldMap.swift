@@ -124,7 +124,7 @@ struct MapLabel: Equatable {
     let rect: CGRect
 }
 
-func mapLabels(projection: MapProjection, reserved: [MapLabel] = []) -> [MapLabel] {
+func mapLabels(projection: MapProjection, reserved: [MapLabel] = [], hotspots: [MapConflict] = []) -> [MapLabel] {
     var result = reserved
     let frame = CGRect(origin: .zero, size: projection.size).insetBy(dx: 4, dy: 4)
     let primary = ["CHN", "USA", "RUS", "CAN", "BRA", "AUS"]
@@ -132,7 +132,7 @@ func mapLabels(projection: MapProjection, reserved: [MapLabel] = []) -> [MapLabe
     let anchors: [String: [MapCoordinate]] = [
         "CHN": [.init(longitude: 103, latitude: 35), .init(longitude: 94, latitude: 40), .init(longitude: 85, latitude: 38)],
         "USA": [.init(longitude: -103, latitude: 38), .init(longitude: -109, latitude: 37)],
-        "RUS": [.init(longitude: 96, latitude: 61)], "CAN": [.init(longitude: -107, latitude: 58)],
+        "RUS": [.init(longitude: 96, latitude: 61), .init(longitude: 130, latitude: 60), .init(longitude: 80, latitude: 70)], "CAN": [.init(longitude: -107, latitude: 58)],
         "BRA": [.init(longitude: -53, latitude: -11)], "AUS": [.init(longitude: 134, latitude: -25)]
     ]
     let font = CTFontCreateUIFontForLanguage(.system, 9.5, nil)!
@@ -158,6 +158,11 @@ func mapLabels(projection: MapProjection, reserved: [MapLabel] = []) -> [MapLabe
         if frame.contains(rect), !result.contains(where: { $0.rect.insetBy(dx: -2, dy: -2).intersects(rect) }) {
             result.append(MapLabel(countryID: "continent:africa", text: africaName, rect: rect)); break
         }
+    }
+    for hotspot in hotspots.prefix(6) {
+        guard !result.contains(where: { $0.countryID == hotspot.countryID }),
+              let country = WorldMap.countries.first(where: { $0.id == hotspot.countryID }) else { continue }
+        placeMapLabel([country.name], id: "hotspot:" + country.id, at: projection.visible(country.label), projection: projection, labels: &result)
     }
     return result
 }
@@ -233,7 +238,15 @@ func mapMarkers(_ events: [WorldEvent], now: Date = Date()) -> [MapMarker] {
 struct MapConflict: Equatable, Sendable {
     let countryID: String
     let score: Int
-    var level: Int { conflictLevel(score) }
+    var sustainedLevel: Int = 0
+    var level: Int { max(conflictLevel(score), sustainedLevel) }
+}
+
+func ongoingCountryID(_ name: String, administration: String) -> String? {
+    if ["gaza strip", "west bank"].contains(administration.lowercased()) { return "PSE" }
+    let simple = name.components(separatedBy: " (")[0].trimmingCharacters(in: .whitespacesAndNewlines)
+    let aliases = ["Ivory Coast": "CIV", "United States of America": "USA", "Congo, Democratic Republic of": "COD", "Congo": "COG", "Bosnia-Herzegovina": "BIH", "Central African Republic": "CAF"]
+    return aliases[simple] ?? WorldMap.countries.first { $0.name.caseInsensitiveCompare(simple) == .orderedSame }?.id
 }
 
 let conflictThresholds = [3, 8, 16, 30]
@@ -267,7 +280,7 @@ private let countryAliases: [String: [String]] = [
     "DEU": ["德国", "德國", "German"], "IND": ["印度"], "PAK": ["巴基斯坦"],
     "AFG": ["阿富汗"], "IRQ": ["伊拉克"], "SYR": ["叙利亚", "敘利亞", "Syria", "Damascus", "大马士革", "大馬士革"],
     "LBN": ["黎巴嫩", "Beirut", "贝鲁特", "貝魯特"], "PSE": ["巴勒斯坦", "Palestine", "Gaza", "West Bank", "Hebron", "加沙", "约旦河西岸", "約旦河西岸"],
-    "SAU": ["沙特", "沙烏地", "Saudi"], "YEM": ["也门", "葉門", "也門", "Sanaa", "Sana'a", "萨那", "薩那"],
+    "SAU": ["沙特", "沙烏地", "Saudi"], "YEM": ["也门", "葉門", "也門", "Sanaa", "Sana'a", "Aden", "萨那", "薩那", "亚丁", "亞丁"],
     "TUR": ["土耳其", "Turkey", "Türkiye"], "EGY": ["埃及"], "JOR": ["约旦", "約旦"],
     "ARE": ["阿联酋", "阿聯酋", "UAE"], "QAT": ["卡塔尔", "卡達", "卡塔爾"],
     "CAN": ["加拿大"], "MEX": ["墨西哥"], "BRA": ["巴西"], "ARG": ["阿根廷"],
@@ -307,7 +320,7 @@ struct ConflictSignal: Codable, Equatable, Sendable {
 }
 
 private let conflictLocationPrefix = try! NSRegularExpression(pattern: #"(?i)(?:\b(?:in|inside|across|near|within|over)\s+(?:(?:the|northern|southern|eastern|western|central|north|south|east|west|occupied)\s+){0,3}|(?:在|于|於|袭击|襲擊|空袭|空襲|轰炸|轟炸|炮击|炮擊|入侵|攻入)[了]?\s*)$"#)
-private let conflictTargetPrefix = try! NSRegularExpression(pattern: #"(?i)\b(?:attacks?|attacked|bombs?|bombed|bombing|invades?|invaded|shells?|shelled|strikes?|struck|hits?|hit|targets?|targeted|(?:attacks?|airstrikes?|strikes?|assault|invasion)\s+on)\s+(?:(?:the|northern|southern|eastern|western|central|city|town|capital|of)\s+){0,4}$"#)
+private let conflictTargetPrefix = try! NSRegularExpression(pattern: #"(?i)\b(?:attacks?|attacked|bombs?|bombed|bombing|invades?|invaded|shells?|shelled|strikes?|struck|hits?|hit|targets?|targeted|plunges?|(?:attacks?|airstrikes?|strikes?|assault|invasion)\s+on)\s+(?:(?:the|northern|southern|eastern|western|central|city|town|capital|of)\s+){0,4}$"#)
 private let conflictVictimSuffix = try! NSRegularExpression(pattern: #"(?i)^\s*(?:(?:['’]s\s+)?(?:capital|city|region|border)\s+)?(?:is\s+|was\s+|are\s+|were\s+)?(?:under attack|hit by|struck by|bombed|shelled|invaded)|^\s*(?:的)?(?:首都|北部|南部|东部|東部|西部|境内|境內|多地|地区|地區|边境|邊境)?(?:发生|發生|遭到|遭|爆发|爆發|遇袭|遇襲)"#)
 private let conflictEventPattern = try! NSRegularExpression(pattern: #"(?i)\b(?:airstrikes?|missiles?|shelling|bombing|bombed|invasion|invades?|invaded|massacre|fighting|clashes|offensive|hostages?|attacks?|attacked|strikes?|struck)\b|空袭|空襲|导弹|導彈|炮击|炮擊|轰炸|轟炸|交火|冲突|衝突|入侵|袭击|襲擊"#)
 private let forceModifier = try! NSRegularExpression(pattern: #"(?i)^\s+(?:missile|drone|military|airstrike|attack|troops|army|forces|soldiers)\b"#)
@@ -355,13 +368,22 @@ func mergedConflictSignals(_ old: [ConflictSignal], _ new: [ConflictSignal], ena
     return Array(byID.values.sorted { $0.date == $1.date ? $0.id < $1.id : $0.date > $1.date }.prefix(100))
 }
 
-func mapConflicts(signals: [ConflictSignal], now: Date = Date()) -> [MapConflict] {
+func mapConflicts(signals: [ConflictSignal], ongoing: OngoingConflictSnapshot? = nil, now: Date = Date()) -> [MapConflict] {
     var scores: [String: Int] = [:]
     for signal in signals where signal.attributionVersion == 2 && signal.date <= now && signal.date >= now.addingTimeInterval(-48 * 3600) {
         for id in signal.countries { scores[id, default: 0] += signal.weight }
     }
-    return scores.compactMap { id, score in conflictLevel(score) == 0 ? nil : MapConflict(countryID: id, score: score) }
-        .sorted { $0.score == $1.score ? $0.countryID < $1.countryID : $0.score > $1.score }.prefix(15).map { $0 }
+    var result = Dictionary(uniqueKeysWithValues: scores.compactMap { id, score in conflictLevel(score) == 0 ? nil : (id, MapConflict(countryID: id, score: score)) })
+    let baseline = ongoing?.isRecent(at: now) == true ? ongoing!.countries : []
+    for country in baseline {
+        result[country.countryID] = MapConflict(countryID: country.countryID, score: scores[country.countryID] ?? 0, sustainedLevel: country.level)
+    }
+    let deaths = Dictionary(uniqueKeysWithValues: baseline.map { ($0.countryID, $0.fatalities) })
+    return result.values.sorted {
+        if $0.level != $1.level { return $0.level > $1.level }
+        if deaths[$0.countryID, default: 0] != deaths[$1.countryID, default: 0] { return deaths[$0.countryID, default: 0] > deaths[$1.countryID, default: 0] }
+        return $0.score == $1.score ? $0.countryID < $1.countryID : $0.score > $1.score
+    }.prefix(15).map { $0 }
 }
 
 func mapConflicts(_ events: [WorldEvent], now: Date = Date()) -> [MapConflict] {

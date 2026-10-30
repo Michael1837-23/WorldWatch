@@ -23,7 +23,10 @@ import UniformTypeIdentifiers
             if let position = issPosition(orbit, at: now) { print("ISS：\(position.latitude), \(position.longitude)") }
             let group = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Group Containers/R58LB5VQ4A.local.michael.worldwatch/WorldWatch/widget-snapshot.json")
             if let snapshot = NewsSnapshotStore(fileURL: group).read() {
-                for item in mapConflicts(snapshot.sourceFeeds?.values.flatMap(\.events) ?? snapshot.events, now: now).prefix(10) {
+                let ongoing = store.ongoing()
+                print("持续冲突来源：UCDP \(ongoing.version)，\(ongoing.monthLabel)，国家汇总 \(ongoing.countries.count)")
+                let signals = snapshot.conflictSignals ?? conflictSignals(snapshot.sourceFeeds?.values.flatMap(\.events) ?? snapshot.events, now: now)
+                for item in mapConflicts(signals: signals, ongoing: ongoing, now: now).prefix(15) {
                     print("冲突 \(WorldMap.countries.first { $0.id == item.countryID }!.name)：\(item.score) 分／\(item.level) 级")
                 }
             }
@@ -426,6 +429,12 @@ import UniformTypeIdentifiers
         assert(compactLabels.contains { $0.countryID == "CHN" } && compactLabels.contains { $0.countryID == "USA" }, "紧凑地图优先显示中美并避开城市圆点")
         assert(compactLabels.contains { $0.countryID == "continent:africa" && $0.text == "Africa" }, "非洲保留大陆标签")
         assert(!compactLabels.contains { ["MEX", "IND", "COD", "ARG"].contains($0.countryID) }, "全球地图只保留主要国家标签")
+        let namedHotspots = mapLabels(projection: compactMap, reserved: cityObstacles, hotspots: [.init(countryID: "UKR", score: 14), .init(countryID: "SDN", score: 3), .init(countryID: "YEM", score: 3)])
+        assert(namedHotspots.contains { $0.text == "Ukraine" } && namedHotspots.contains { $0.text == "Sudan" } && namedHotspots.contains { $0.text == "Yemen" }, "显色热点需要有名称")
+        for a in namedHotspots.indices where !namedHotspots[a].text.isEmpty { for b in namedHotspots.indices where a != b { assert(!namedHotspots[a].rect.intersects(namedHotspots[b].rect)) } }
+        let satelliteAtRussia = compactMap.visible(.init(longitude: 96, latitude: 51))
+        let satelliteObstacle = MapLabel(countryID: "satellite", text: "", rect: CGRect(x: satelliteAtRussia.x - 6, y: satelliteAtRussia.y - 6, width: 12, height: 12))
+        assert(mapLabels(projection: compactMap, reserved: cityObstacles + [satelliteObstacle], hotspots: [.init(countryID: "UKR", score: 14)]).contains { $0.countryID == "RUS" }, "卫星经过时俄罗斯名称不能消失")
         assert(abs(solarPosition(at: parseDate("2026-06-21T12:00:00Z")!).latitude - 23.4) < 1)
         assert(abs(solarPosition(at: parseDate("2026-12-21T12:00:00Z")!).latitude + 23.4) < 1)
         let sun = solarPosition(at: now)
@@ -680,6 +689,8 @@ import UniformTypeIdentifiers
         let strikeCountries = mapConflicts([headline("kyiv-strike", "Russia strikes energy facilities in Kyiv", "bbc", 3600)], now: now)
         assert(strikeCountries.contains { $0.countryID == "UKR" } && !strikeCountries.contains { $0.countryID == "RUS" }, "袭击方不能被当成事发地")
         assert(conflictLocations("US says Russia strikes energy facilities in Kyiv") == ["UKR"], "发言方和攻击方不染色")
+        assert(conflictLocations("Russian strikes plunge Ukrainian city into blackout") == ["UKR"])
+        assert(conflictLocations("Yemenis in Aden prepare for another war as missiles fall") == ["YEM"], "亚丁的实际袭击应归入也门")
         assert(conflictLocations("Ukraine launches missile attacks on Russia") == ["RUS"], "按攻击目标而非固定国家名单判断")
         assert(conflictLocations("Ukraine launches missile strikes on Moscow") == ["RUS"])
         assert(conflictLocations("US troops killed in Iraq") == ["IRQ"])
@@ -757,6 +768,53 @@ import UniformTypeIdentifiers
         let combined = mapLabels(projection: tiny, reserved: crowded)
         for a in combined.indices { for b in combined.indices where a < b { assert(!combined[a].rect.intersects(combined[b].rect)) } }
         let layerStore = MapLayerStore(root: temporary.appendingPathComponent("MapLayers"))
+        let ucdpHeader = "id,active_year,code_status,type_of_violence,country,adm_1,best,date_start,date_end,note\r\n"
+        let ucdpRows = """
+        1,true,Clear,1,Ukraine,Kyiv,1000,2026-09-01,2026-09-02,"comma, quote ""test""
+        second line"
+        2,true,Clear,1,Russia (Soviet Union),Belgorod,30,2026-09-03,2026-09-03,local
+        3,true,Clear,3,Israel,Gaza Strip,25,2026-09-04,2026-09-04,location
+        4,false,Clear,1,United States of America,,2000,2026-09-04,2026-09-04,inactive
+        5,true,Check deaths,1,United States of America,,2000,2026-09-04,2026-09-04,provisional
+        6,true,Clear,1,United States of America,,2000,2026-08-01,2026-09-04,cross-month
+        7,true,Clear,1,United States of America,,2000,2026-09-01,2026-10-01,cross-month
+        8,true,Clear,1,United States of America,,0,2026-09-01,2026-09-01,zero
+        2,true,Clear,1,Russia (Soviet Union),Belgorod,30,2026-09-03,2026-09-03,duplicate
+        """
+        let ucdpData = Data(([0xEF, 0xBB, 0xBF] as [UInt8]) + Array((ucdpHeader + ucdpRows).utf8))
+        let ongoing = try parseOngoingConflictCSV(ucdpData, version: "26.0.9", now: now)
+        assert(ongoing.countries.map(\.countryID) == ["UKR", "RUS", "PSE"])
+        assert(ongoing.countries.map(\.level) == [4, 2, 2] && ongoing.countries.allSatisfy { $0.events == 1 })
+        assert(ongoing.monthLabel == "2026年9月" && ongoing.periodEnd == parseDate("2026-10-01T00:00:00Z"))
+        let decodedOngoing = try JSONDecoder().decode(OngoingConflictSnapshot.self, from: JSONEncoder().encode(ongoing))
+        assert(decodedOngoing == ongoing)
+        let indexData = Data("GEDEvent_v26_0_8.csv GEDEvent_v26_0_9.csv GEDEvent_v26_0_10.csv GEDEvent_v26_0_13.csv".utf8)
+        let selectedVersion = try latestOngoingConflictVersion(indexData, now: now)
+        assert(selectedVersion == "26.0.9", "忽略尚未结束的月份")
+        for bad in ["26.foo.0.9", "26..9", "26.0.13", "26.0.10"] {
+            do { _ = try parseOngoingConflictCSV(ucdpData, version: bad, now: now); fatalError("应拒绝无效或未完成的月份") } catch {}
+        }
+        for bad in [ucdpHeader + "1,true,Clear", ucdpHeader + "\"unterminated", "<html>Unavailable</html>"] {
+            do { _ = try parseOngoingConflictCSV(Data(bad.utf8), version: "26.0.9", now: now); fatalError("应拒绝损坏数据") } catch {}
+        }
+        assert(ongoingCountryID("Central African Republic", administration: "") == "CAF")
+        assert(ongoingCountryID("Myanmar (Burma)", administration: "") == "MMR")
+        let sustained = mapConflicts(signals: [], ongoing: ongoing, now: now)
+        assert(sustained.map(\.countryID) == ["UKR", "RUS", "PSE"], "没有新报道时，持续冲突仍显色")
+        assert(!mapConflicts(signals: [], ongoing: ongoing, now: now.addingTimeInterval(86400)).isEmpty)
+        assert(mapConflicts(signals: [], ongoing: ongoing, now: ongoing.periodEnd.addingTimeInterval(121 * 86400)).isEmpty)
+        assert(mapConflicts(signals: [], ongoing: ongoing, now: ongoing.periodEnd.addingTimeInterval(-1)).isEmpty)
+        let blended = mapConflicts(signals: conflictSignals([headline("iran-current", "Missiles hit Iran", "bbc", 1)], now: now), ongoing: ongoing, now: now)
+        assert(blended.contains { $0.countryID == "IRN" && $0.level == 1 } && blended.contains { $0.countryID == "RUS" })
+        let seed = OngoingConflictSnapshot.initial
+        assert(seed.version == "26.0.9" && seed.countries.count == 29 && !seed.countries.contains { $0.countryID == "USA" })
+        let seedMap = mapConflicts(signals: [], ongoing: seed, now: now)
+        assert(seedMap.count == 15 && seedMap.contains { $0.countryID == "RUS" } && seedMap.contains { $0.countryID == "UKR" })
+        assert(layerStore.ongoing() == seed, "无网络缓存时使用经过核对的离线月度汇总")
+        try layerStore.write(.init(checkedAt: now, fetchedAt: now, value: ongoing), name: "ongoing-conflicts")
+        try layerStore.write(.init(checkedAt: now.addingTimeInterval(-1), fetchedAt: now, value: seed), name: "ongoing-conflicts")
+        assert(layerStore.ongoing() == ongoing, "旧请求不能覆盖新缓存")
+        print("PASS: UCDP 月份选择、CSV 引号/换行/BOM/去重、有效记录与发生地、俄乌离线基线、新闻叠加、120 天过期及 15 国上限")
         try layerStore.write(.init(checkedAt: now, fetchedAt: now.addingTimeInterval(-86401), value: [track]), name: "cyclones")
         assert(layerStore.cyclones(at: now).isEmpty)
         try FileManager.default.removeItem(at: temporary)
