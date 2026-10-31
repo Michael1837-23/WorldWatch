@@ -242,7 +242,8 @@ struct WorldComponentProvider: TimelineProvider {
             }
             async let refreshed = refreshNews(snapshot)
             async let layers = refreshLayers()
-            if cameras && !stale.isEmpty { _ = await CameraService.shared.refresh(cities: stale, limit: 1, budget: 20) }
+            let appQuiet = CameraCity.appHeartbeat.map { Date().timeIntervalSince($0) >= CameraCity.interval * 2 } ?? true
+            if cameras && appQuiet && !stale.isEmpty { _ = await CameraService.shared.refresh(cities: stale, limit: 1, budget: 20) }
             let refreshedSnapshot = await refreshed
             _ = await layers
             let latest = newerSnapshot(refreshedSnapshot, NewsSnapshotStore.shared.read())
@@ -273,6 +274,7 @@ struct WorldComponentProvider: TimelineProvider {
         let pool = displayPool(all, mode: mode, now: now, filter: filter)
         let cities = CameraCity.selected, settings = MapSettings()
         let frames = Dictionary(uniqueKeysWithValues: cities.map { ($0.id, CameraSnapshotStore.shared.read($0.id)?.frames.filter(CameraOptions.allows) ?? []) })
+        cameraLog.notice("实景时间线：\(cities.map { "\($0.id)=\(frames[$0.id]?.count ?? 0)" }.joined(separator: " "), privacy: .public)")
         let spacing = Self.entrySpacing, slot = floor(now.timeIntervalSince1970 / spacing) * spacing
         return (0..<min(10, max(1, Int(Double(minutes * 60) / spacing)))).map { index in
             let date = index == 0 ? now : Date(timeIntervalSince1970: slot + Double(index) * spacing)
@@ -362,7 +364,7 @@ struct WorldLiveWidget: Widget {
 
 @main struct WorldWatchWidgets: WidgetBundle {
     init() {
-        NSLog("世界动态组件目录 2.8/26：WorldWatchNews、WorldWatchDashboard、WorldWatchMap、WorldWatchLive")
+        NSLog("世界动态组件目录 2.8/29：WorldWatchNews、WorldWatchDashboard、WorldWatchMap、WorldWatchLive")
     }
     var body: some Widget {
         WorldWatchWidget()

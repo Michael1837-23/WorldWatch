@@ -597,6 +597,21 @@ import UniformTypeIdentifiers
         assert(fellThrough && fallbackStore.read(fallbackCity.id)?.frames.first?.sourceID == good.id)
         assert(fallbackStore.health()[failed.id]?.state == .failing && fallbackStore.health()[cover.id]?.state == .staticCover)
         assert(fallbackStore.sources()[fallbackCity.id]?.count == 3)
+        let topUpStore = CameraSnapshotStore(root: temporary.appendingPathComponent("TopUp"))
+        let topUpSources = ["x-cam", "y-cam"].enumerated().map { index, id -> CameraSource in
+            var source = testSource(id); source.imageURL = URL(string: "https://example.org/top\(index).png")!; return source
+        }
+        try topUpStore.writeState([fallbackCity.id: topUpSources], name: "sources.json")
+        let earlier = Date().addingTimeInterval(-3600)
+        try topUpStore.write(CameraManifest(checkedAt: earlier, fetchedAt: earlier, frames: topUpSources.map { source in
+            CameraFrame(file: "old/\(source.id).jpg", sourceType: "官方", page: source.page, imageURL: source.imageURL, fetchedAt: earlier, sourceID: source.id, platform: .official)
+        }, error: nil), city: fallbackCity.id)
+        let topUpService = CameraService(store: topUpStore, request: { url, _ in
+            (sample, HTTPURLResponse(url: url, statusCode: 200, httpVersion: nil, headerFields: ["Content-Type": "image/png"])!)
+        })
+        _ = await topUpService.refresh(cities: [fallbackCity], limit: 1, force: true)
+        let toppedUp = topUpStore.read(fallbackCity.id)?.frames.compactMap(\.sourceID) ?? []
+        assert(Set(toppedUp) == ["x-cam", "y-cam"] && toppedUp.count == 2, "只抓到一张新图时用上一批其他镜头补足轮播")
         let sharedPageStore = CameraSnapshotStore(root: temporary.appendingPathComponent("SharedPage"))
         try sharedPageStore.writeState([fallbackCity.id: distinctSources], name: "sources.json")
         let sharedPageService = CameraService(store: sharedPageStore, request: { url, _ in

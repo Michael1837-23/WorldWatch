@@ -317,6 +317,12 @@ private enum CameraFixedSources {
             .skyline(5216, title: "Skyline of Shanghai", path: "/en/webcam/china/shanghai/shanghai/skyline-of-shanghai.html")
         ],
         "hongkong": [
+            .init(id: "official:hktd-H106F", platform: .official, title: "运输署 · 中环干诺道中近交易广场", imageURL: URL(string: "https://tdcctv.data.one.gov.hk/H106F.JPG")!, page: URL(string: "https://data.gov.hk/en-data/dataset/hk-td-tis_2-traffic-snapshot-images")!),
+            .init(id: "official:hktd-H107F", platform: .official, title: "运输署 · 中环毕打街", imageURL: URL(string: "https://tdcctv.data.one.gov.hk/H107F.JPG")!, page: URL(string: "https://data.gov.hk/en-data/dataset/hk-td-tis_2-traffic-snapshot-images")!),
+            .init(id: "official:hktd-H203F", platform: .official, title: "运输署 · 铜锣湾怡和街近轩尼诗道", imageURL: URL(string: "https://tdcctv.data.one.gov.hk/H203F.JPG")!, page: URL(string: "https://data.gov.hk/en-data/dataset/hk-td-tis_2-traffic-snapshot-images")!),
+            .init(id: "official:hktd-H216F", platform: .official, title: "运输署 · 铜锣湾时代广场附近", imageURL: URL(string: "https://tdcctv.data.one.gov.hk/H216F.JPG")!, page: URL(string: "https://data.gov.hk/en-data/dataset/hk-td-tis_2-traffic-snapshot-images")!),
+            .init(id: "official:hktd-H214F", platform: .official, title: "运输署 · 金钟夏悫道", imageURL: URL(string: "https://tdcctv.data.one.gov.hk/H214F.JPG")!, page: URL(string: "https://data.gov.hk/en-data/dataset/hk-td-tis_2-traffic-snapshot-images")!),
+            .init(id: "official:hktd-K101F", platform: .official, title: "运输署 · 尖沙咀梳士巴利道近弥敦道", imageURL: URL(string: "https://tdcctv.data.one.gov.hk/K101F.JPG")!, page: URL(string: "https://data.gov.hk/en-data/dataset/hk-td-tis_2-traffic-snapshot-images")!),
             .init(id: "official:hko-hko", platform: .official, title: "香港天文台 · 尖沙咀向东", imageURL: URL(string: "https://www.hko.gov.hk/wxinfo/aws/hko_mica/hko/latest_HKO.jpg")!, page: URL(string: "https://www.hko.gov.hk/en/wxinfo/ts/index_webcam.htm")!),
             .init(id: "official:hko-cp1", platform: .official, title: "香港天文台 · 中环维多利亚港", imageURL: URL(string: "https://www.hko.gov.hk/wxinfo/aws/hko_mica/cp1/latest_CP1.jpg")!, page: URL(string: "https://www.hko.gov.hk/en/wxinfo/ts/index_webcam.htm")!),
             .init(id: "official:hko-vpb", platform: .official, title: "香港天文台 · 太平山向东北", imageURL: URL(string: "https://www.hko.gov.hk/wxinfo/aws/hko_mica/vpb/latest_VPB.jpg")!, page: URL(string: "https://www.hko.gov.hk/en/wxinfo/ts/index_webcam.htm")!),
@@ -341,6 +347,7 @@ private enum CameraFixedSources {
             .youtube("pmM2CeSAx0I", title: "Live Cam Taiwan Taipei City 台湾、台北のライブカメラ川岸の夜景 給大家放鬆的畫面和音樂,", channel: "https://www.youtube.com/channel/UCk-EAKT8Q5O2tm_TlhTmgOw/live")
         ],
         "newyork": [
+            .skyline(6064, title: "Podcast View in Times Square - New York", path: "/en/webcam/united-states/new-york/new-york/podcast-view-times-square.html"),
             .youtube("VGnFLdQW39A", title: "🔴 24/7 NYC Live Cam | Times Square, skyline, streets, more", channel: "https://www.youtube.com/channel/UCIjSUWHWp6KohfnR5OQTXnQ/live"),
             .youtube("VXo0VqVcbK4", title: "Times Square: 1560 Broadway View Live", channel: "https://www.youtube.com/channel/UC1Rp_0bp86QEUt9TlMN5tlQ/live"),
             .youtube("KHy_n-EMWY8", title: "EarthCam Live:  Times Square Crossroads (New York City, NY)", channel: "https://www.youtube.com/channel/UC6qrG3W8SMK0jior2olka3g/live"),
@@ -351,6 +358,8 @@ private enum CameraFixedSources {
             .skyline(544, title: "Ball Drop Times Square - New York", path: "/en/webcam/united-states/new-york/new-york/ball-drop-times-square.html")
         ],
         "losangeles": [
+            .init(id: "official:caltrans-us101607hollywoodblvd", platform: .official, title: "Caltrans · US-101 Hollywood Blvd", imageURL: URL(string: "https://cwwp2.dot.ca.gov/data/d7/cctv/image/us101607hollywoodblvd/us101607hollywoodblvd.jpg")!, page: URL(string: "https://cwwp2.dot.ca.gov/vm/iframemap.htm")!),
+            .init(id: "official:caltrans-us101605santamonicablvd", platform: .official, title: "Caltrans · US-101 Santa Monica Blvd", imageURL: URL(string: "https://cwwp2.dot.ca.gov/data/d7/cctv/image/us101605santamonicablvd/us101605santamonicablvd.jpg")!, page: URL(string: "https://cwwp2.dot.ca.gov/vm/iframemap.htm")!),
             .youtube("8ucy5a4oQ2g", title: "🔴 Skid Row - Los Angeles - Live Cam", channel: "https://www.youtube.com/channel/UCNXQo1QN9bCkGEzu1X4G8vQ/live"),
             .youtube("3aRsjJylNM8", title: "Skid Row Cam1 Los Angeles, CA.", channel: "https://www.youtube.com/channel/UCQ1awPPNFA4AxnJ6dQyXfbg/live"),
             .youtube("EO_1LWqsCNE", title: "🔴 Los Angeles Live Cam · Venice Beach · Venice V Hotel · Live Camera Stream", channel: "https://www.youtube.com/channel/UCegzBUd6-PYoO_v7gjJgufg/live"),
@@ -368,6 +377,13 @@ private enum CameraFixedSources {
             .skyline(3002, title: "Paris - Sacré-Cœur", path: "/en/webcam/france/ile-de-france/paris/le-sacre-coeur-de-montmartre.html")
         ],
         "london": [
+            .init(id: "official:tfl-07450", platform: .official, title: "TfL · Piccadilly Circus", imageURL: URL(string: "https://s3-eu-west-1.amazonaws.com/jamcams.tfl.gov.uk/00001.07450.jpg")!, page: URL(string: "https://tfl.gov.uk/traffic/status/")!),
+            .init(id: "official:tfl-06501", platform: .official, title: "TfL · Parliament Square", imageURL: URL(string: "https://s3-eu-west-1.amazonaws.com/jamcams.tfl.gov.uk/00001.06501.jpg")!, page: URL(string: "https://tfl.gov.uk/traffic/status/")!),
+            .init(id: "official:tfl-03500", platform: .official, title: "TfL · Tower Bridge Approach", imageURL: URL(string: "https://s3-eu-west-1.amazonaws.com/jamcams.tfl.gov.uk/00001.03500.jpg")!, page: URL(string: "https://tfl.gov.uk/traffic/status/")!),
+            .init(id: "official:tfl-07451", platform: .official, title: "TfL · Regent St / Conduit St", imageURL: URL(string: "https://s3-eu-west-1.amazonaws.com/jamcams.tfl.gov.uk/00001.07451.jpg")!, page: URL(string: "https://tfl.gov.uk/traffic/status/")!),
+            .init(id: "official:tfl-08850", platform: .official, title: "TfL · Marble Arch", imageURL: URL(string: "https://s3-eu-west-1.amazonaws.com/jamcams.tfl.gov.uk/00001.08850.jpg")!, page: URL(string: "https://tfl.gov.uk/traffic/status/")!),
+            .init(id: "official:tfl-06515", platform: .official, title: "TfL · Hyde Park Corner", imageURL: URL(string: "https://s3-eu-west-1.amazonaws.com/jamcams.tfl.gov.uk/00001.06515.jpg")!, page: URL(string: "https://tfl.gov.uk/traffic/status/")!),
+            .init(id: "official:tfl-06590", platform: .official, title: "TfL · Strand / Lancaster Place", imageURL: URL(string: "https://s3-eu-west-1.amazonaws.com/jamcams.tfl.gov.uk/00001.06590.jpg")!, page: URL(string: "https://tfl.gov.uk/traffic/status/")!),
             .youtube("cf9uxEFIDtI", title: "🔴LIVE Notting Hill Gate Station - London 4K Webcam", channel: "https://www.youtube.com/channel/UC4-aIBtpNAPqEcMhAyFN6iQ/live"),
             .youtube("zMCea32gpmg", title: "EarthCam Live:  Abbey Road Crossing (London, England)", channel: "https://www.youtube.com/channel/UC6qrG3W8SMK0jior2olka3g/live"),
             .skyline(1207, title: "London - Abbey Road", path: "/en/webcam/united-kingdom/england/london/london-abbey-road.html")

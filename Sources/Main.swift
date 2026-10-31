@@ -181,8 +181,12 @@ struct CachedFeed: Codable {
         cameraLoop = Task {
             while !Task.isCancelled {
                 await Task { await self.refreshCameras() }.value
-                // Freshness is measured from successful completion, so wait the full interval after each round.
-                do { try await Task.sleep(nanoseconds: UInt64(cameraInterval * 1_000_000_000)) }
+                // Sleep until the earliest city falls due rather than a full interval: a round that found
+                // nothing due would otherwise push the next capture out to almost twice the interval.
+                let nextDue = selectedCities.compactMap { CameraSnapshotStore.shared.read($0.id)?.checkedAt }
+                    .map { $0.addingTimeInterval(cameraInterval) }.min()
+                let delay = min(cameraInterval, max(30, nextDue.map { $0.timeIntervalSinceNow } ?? cameraInterval))
+                do { try await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000)) }
                 catch { return }
             }
         }
@@ -192,6 +196,7 @@ struct CachedFeed: Codable {
         cameraRefreshing = true
         defer { cameraRefreshing = false }
         let changed = await CameraService.shared.refresh(cities: selectedCities, force: force, resetCooldown: force)
+        CameraCity.appHeartbeat = Date()
         readCameras()
         if changed { requestWidgetReload() }
     }

@@ -1,7 +1,10 @@
 import Foundation
+import OSLog
 import ImageIO
 import UniformTypeIdentifiers
 import Darwin
+
+let cameraLog = Logger(subsystem: "local.michael.worldwatch", category: "camera")
 
 enum CameraCandidate: Sendable {
     case youtubeSearch(String)
@@ -49,6 +52,12 @@ struct CameraCity: Identifiable, Sendable {
         let ids = WorldPreferences.shared.stringArray(forKey: "cameraCities") ?? defaults
         var seen = Set<String>()
         return ids.compactMap { id in seen.insert(id).inserted ? all.first { $0.id == id } : nil }.prefix(4).map { $0 }
+    }
+    /// Set by the app after each capture round. The widget only captures on its own when the app has gone quiet,
+    /// otherwise its single-frame fallback would replace the app's three rotating cameras.
+    static var appHeartbeat: Date? {
+        get { WorldPreferences.shared.object(forKey: "cameraHeartbeat") as? Date }
+        set { WorldPreferences.shared.set(newValue, forKey: "cameraHeartbeat") }
     }
     static var interval: TimeInterval {
         get {
@@ -348,8 +357,20 @@ actor CameraService {
             guard let id = frame.sourceID else { return CameraOptions.skyline || frame.platform != .skyline }
             return !CameraOptions.disabled.contains(id) && (CameraOptions.skyline || frame.platform != .skyline)
         } ?? []
+        // Keep three different cameras rotating: top up a short round with last round's other cameras that are still usable.
+        if !frames.isEmpty && !diagnostic {
+            for frame in retained where frames.count < 3 {
+                guard let id = frame.sourceID, !frames.contains(where: { $0.sourceID == id }),
+                      [.live, .unverified].contains(health[id]?.state ?? .unverified) else { continue }
+                frames.append(frame)
+            }
+        }
         let manifest = CameraManifest(checkedAt: began, fetchedAt: frames.isEmpty ? previous?.fetchedAt : frames.map(\.fetchedAt).max(),
                                       frames: frames.isEmpty ? retained : frames, error: frames.isEmpty ? lastError : nil)
+        let usable = (pools[city.id] ?? []).filter { [.live, .unverified].contains(health[$0.id]?.state ?? .unverified) }.count
+        let summary = frames.map { "\($0.sourceID ?? "?")=\(health[$0.sourceID ?? ""]?.state.rawValue ?? "?")" }.joined(separator: ", ")
+        // NSLog content is redacted as <private> in the unified log; mark these diagnostics public explicitly.
+        cameraLog.notice("实景轮次 \(city.id, privacy: .public)：\(frames.count) 张 [\(summary, privacy: .public)]，可用来源 \(usable)/\(self.pools[city.id]?.count ?? 0)\(frames.isEmpty ? "，保留上批：" + lastError : "", privacy: .public)")
         do {
             let saved = try store.write(manifest, city: city.id)
             store.prune(city.id)

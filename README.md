@@ -1,6 +1,6 @@
 # 世界动态 · Mac 桌面组件
 
-原生 Swift / AppKit / SwiftUI 配套应用与四种 WidgetKit 桌面组件。英文标题自动译为中文（悬停可看原文），点击标题打开原报道。当前版本 2.8（build 26），使用用户自己的 Apple Development 团队签名。
+原生 Swift / AppKit / SwiftUI 配套应用与四种 WidgetKit 桌面组件。英文标题自动译为中文（悬停可看原文），点击标题打开原报道。当前版本 2.8（build 29），使用用户自己的 Apple Development 团队签名。
 
 ## 使用
 
@@ -163,3 +163,11 @@ App 独立运行截图循环，只抓已选城市，同时最多四城；某城�
 - 改为 UCDP 月度独立基线与短期新闻叠加，俄乌不再因新闻列表轮换或 48 小时窗口丢失底图；设置展示来源月份和使用边界。
 - 热点名称加引线并避让，Russia 增加备用标签锚点；新闻数量 100、显色国家 15、总览时间线 10 条均保持上限。
 - 验证结果见 [build 25 验收记录](docs/acceptance/升级验收记录-build25.md)。
+
+## 2.8 build 29：实景刷新与更多点位
+
+- **抓取不再被拖到近两倍间隔**：以前每轮结束固定睡满一个间隔，若这一轮恰好没有城市到期，下一次真正抓取会推迟到将近两倍间隔。现在睡到最早一座城市到期为止（30 秒到一个间隔之间）。
+- **组件不再用单张图覆盖 App 的三张轮播**：App 每轮抓取后记录心跳；只有 App 超过两个间隔没有心跳（通常是没在运行）时，组件才自己补抓。任何一轮新图不足三张时，用上一批其他仍可用的镜头补足，保证每座城市尽量有三个不同摄像点轮换。
+- **新增官方点位**：香港运输署交通快照 6 个（中环干诺道中、毕打街、铜锣湾怡和街、时代广场附近、金钟夏悫道、尖沙咀梳士巴利道，约 2 分钟更新）；伦敦 TfL 7 个（Piccadilly Circus、Parliament Square、Tower Bridge、Regent St、Marble Arch、Hyde Park Corner、Strand）；洛杉矶 Caltrans 2 个（US-101 Hollywood Blvd、Santa Monica Blvd）；纽约 SkylineWebcams 1 个（Times Square Podcast View）。
+- 扩大搜索后仍无新增的：SkylineWebcams 的东京、台北、伦敦镜头预览图已停更数月至数年；台湾高速公路局只提供 MJPEG 视频流且为高速公路镜头，未采用；纽约交通局接口本机仍无法连接。
+- 实景日志改用 `Logger`（subsystem `local.michael.worldwatch`，category `camera`）并标为公开，可用 `/usr/bin/log show --predicate 'subsystem == "local.michael.worldwatch"'` 查看每轮每城选用的镜头与状态；此前 `NSLog` 在本系统上被记为 `<private>`。
