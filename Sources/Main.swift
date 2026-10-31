@@ -490,7 +490,7 @@ struct WorldView: View {
                 else if store.healthyCount == 0 { Label("暂时无法连接", systemImage: "wifi.exclamationmark") }
                 else { Label("暂无报道", systemImage: "globe.asia.australia") }
             } description: {
-                Text(store.newsFilter.mode == .personal || store.newsFilter.eventsOnly ? "请调整新闻过滤设置。" : store.enabledSources.isEmpty ? "在设置中启用至少一个来源。" : store.healthyCount == 0 && !store.refreshing ? "请检查网络后重试。" : "最多保留最新 100 条；新闻最长三天，灾害最长七天。")
+                Text(store.newsFilter.mode == .personal || store.newsFilter.eventsOnly ? "请调整新闻过滤设置。" : store.enabledSources.isEmpty ? "在设置中启用至少一个来源。" : store.healthyCount == 0 && !store.refreshing ? "请检查网络后重试。" : "新闻最多保留最新 100 条（地震与灾害另计）；新闻最长三天，灾害最长七天。")
             } actions: {
                 if store.newsFilter.mode == .personal || store.newsFilter.eventsOnly { Button("调整过滤") { store.showSources = true } }
                 else if store.enabledSources.isEmpty { Button("打开设置") { store.showSources = true } }
@@ -747,7 +747,7 @@ struct SettingsView: View {
                         }
                     }
                 } header: { Text("来源") } footer: {
-                    Text("最多保留最新 100 条；新闻最长三天，灾害最长七天。小组件的实际刷新时刻由 macOS 决定。停止抓取会同时影响地图；只想不显示某个来源请用「新闻过滤」。").foregroundStyle(.secondary)
+                    Text("新闻最多保留最新 100 条（地震与灾害另计）；新闻最长三天，灾害最长七天。小组件的实际刷新时刻由 macOS 决定。停止抓取会同时影响地图；只想不显示某个来源请用「新闻过滤」。").foregroundStyle(.secondary)
                 }
             }
             .formStyle(.grouped)

@@ -330,6 +330,15 @@ import UniformTypeIdentifiers
         let retained = mergedEvents(limited.values.flatMap(\.events), now: now)
         assert(retained.map(\.id) == recentNews.prefix(100).map(\.id), "所有来源合计只保留最新 100 条")
         assert(limited["empty"]?.events.isEmpty == true && limited["bbc"]?.fetchedAt == now, "保留空来源和检查时间")
+        let quakeEvent = WorldEvent(id: "usgs:old", sourceID: "usgs", title: "M6.8", url: URL(string: "https://example.org/q")!,
+                                    date: now.addingTimeInterval(-86400), timeKind: "发生", disaster: true, severity: "显著地震", latitude: 1, longitude: 2, magnitude: 6.8)
+        let withDisaster = limitedSourceFeeds([
+            "bbc": SourceSnapshot(events: recentNews.filter { $0.sourceID == "bbc" }, fetchedAt: now),
+            "guardian": SourceSnapshot(events: recentNews.filter { $0.sourceID == "guardian" }, fetchedAt: now),
+            "usgs": SourceSnapshot(events: [quakeEvent], fetchedAt: now)
+        ])
+        assert(withDisaster["usgs"]?.events.map(\.id) == [quakeEvent.id], "地震与灾害不受 100 条上限挤占")
+        assert(withDisaster.filter { $0.key != "usgs" }.values.flatMap(\.events).count == 100, "普通新闻仍保留 100 条")
         let limitedSnapshot = refreshedSnapshot(previous: nil, results: [
             .init(id: "bbc", events: recentNews.filter { $0.sourceID == "bbc" }),
             .init(id: "guardian", events: recentNews.filter { $0.sourceID == "guardian" })

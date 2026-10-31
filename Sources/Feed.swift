@@ -246,8 +246,11 @@ struct SourceFetchResult: Sendable {
 
 let retainedNewsLimit = 100
 
+/// Caps ordinary news at the newest `retainedNewsLimit`. Earthquake and disaster feeds are exempt: their
+/// occurrence times are usually older than the news stream, so a shared cap would drop every map marker.
 func limitedSourceFeeds(_ feeds: [String: SourceSnapshot]) -> [String: SourceSnapshot] {
-    let latest = feeds.flatMap { id, feed in feed.events.map { (id, $0) } }.sorted {
+    let disasterIDs = Set(NewsSource.all.filter(\.disaster).map(\.id))
+    let latest = feeds.filter { !disasterIDs.contains($0.key) }.flatMap { id, feed in feed.events.map { (id, $0) } }.sorted {
         let first = $0.1.date ?? .distantPast, second = $1.1.date ?? .distantPast
         if first != second { return first > second }
         if $0.1.id != $1.1.id { return $0.1.id < $1.1.id }
@@ -258,7 +261,7 @@ func limitedSourceFeeds(_ feeds: [String: SourceSnapshot]) -> [String: SourceSna
         var result = feed
         result.events = []
         return result
-    }.merging(grouped.mapValues { items in
+    }.merging(feeds.filter { disasterIDs.contains($0.key) }) { _, kept in kept }.merging(grouped.mapValues { items in
         SourceSnapshot(events: items.map { $0.1 }, fetchedAt: feeds[items[0].0]!.fetchedAt)
     }) { _, selected in selected }
 }
