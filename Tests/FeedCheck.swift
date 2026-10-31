@@ -318,7 +318,18 @@ import UniformTypeIdentifiers
         assert(capped.count == domesticFlood.count && capped.prefix(3).filter(\.isDomestic).count == 1, "国内占比上限只顺延，不丢弃")
         assert(capped.prefix(3).map(\.id) == ["cn0", "world-a", "world-b"])
         assert(balancedByOrigin(mergedEvents(domesticFlood, now: now), ratio: nil).prefix(3).allSatisfy(\.isDomestic), "不限时保持纯时间顺序")
-        print("PASS: 国内新闻占比上限、最新置顶、旧条目顺次下移、无新增不轮换、模式切换与兼容、小尺寸最新显示")
+        func eventTitle(_ title: String, _ source: String = "bbc") -> Bool { isEventHeadline(headline("ev-" + title, title, source, 1)) }
+        assert(!eventTitle("Black Doves actress says she loved playing 'a very Welsh assassin'"), "访谈式「某人说她喜欢」不算事件")
+        assert(!eventTitle("‘Paycheck to paycheck’: Texas border voters shed parties amid economic hardship"), "引语开头的特写不算事件")
+        assert(eventTitle("Fallon Sherrock pulls off shock defeat of world darts No 1 Luke Littler"))
+        assert(eventTitle("2027版熊猫贵金属纪念币发行仪式在京举行", "cns-finance"))
+        assert(!eventTitle("Trump vs MAGA: Why his movement is splitting"), "冒号后的为什么属于解读")
+        assert(!eventTitle("清香“调”进江南：汾酒城市巡游杭州站，看见传统名酒的“慢表达”", "cns-finance"), "软文不算事件")
+        assert(!eventTitle("Can Democrats win the US Senate? 10 key midterm races to watch") && !eventTitle("Massive Gen Z protests set to sweep cities across Germany"))
+        assert(eventTitle("北海道特急深夜撞熊出轨 乘客被迫车内过夜", "cna") && eventTitle("Rival US and Russian resolutions on Western Sahara fail at UN"))
+        assert(!eventTitle("Britain’s Prime Minister Says He’s Open to a Formal Apology"), "只有「说」没有动作不算事件")
+        assert(eventTitle("Players' union strikes over pay cuts"), "所有格撇号不误判为引语开头")
+        print("PASS: 事件类新闻判断、国内新闻占比上限、最新置顶、旧条目顺次下移、无新增不轮换、模式切换与兼容、小尺寸最新显示")
         let recentNews = (0..<160).map { index in
             headline("limited-\(index)", "News item \(index)", index.isMultiple(of: 2) ? "bbc" : "guardian", Double(index))
         }

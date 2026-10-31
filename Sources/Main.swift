@@ -452,6 +452,9 @@ struct WorldView: View {
                         })) {
                             ForEach(NewsFilterMode.allCases, id: \.self) { Text($0.title).tag($0) }
                         }.pickerStyle(.inline)
+                        Toggle("只看事件类新闻", isOn: Binding(get: { store.newsFilter.eventsOnly }, set: { on in
+                            var value = store.newsFilter; value.eventOnly = on; store.setNewsFilter(value)
+                        }))
                     }
                     Section("范围") {
                     Picker("范围", selection: $store.filter) {
@@ -615,7 +618,12 @@ struct NewsFilterSection: View {
                 ForEach(NewsFilterMode.allCases, id: \.self) { Text($0.title).tag($0) }
             }
             .pickerStyle(.segmented)
-            Toggle("只看事件类新闻", isOn: Binding(get: { store.newsFilter.eventsOnly }, set: { on in update { $0.eventOnly = on } }))
+            Toggle(isOn: Binding(get: { store.newsFilter.eventsOnly }, set: { on in update { $0.eventOnly = on } })) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("只看事件类新闻")
+                    Text("只保留「某地发生了某事」式的报道，排除访谈、评论、解读、特写、预告与软文；按标题规则判断，可能有误差").font(.system(size: 11)).foregroundStyle(.secondary)
+                }
+            }
             if store.newsFilter.mode == .personal {
                 VStack(alignment: .leading, spacing: 8) {
                     Text("领域").fontWeight(.medium)

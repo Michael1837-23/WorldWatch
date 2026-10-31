@@ -137,10 +137,34 @@ private let nonEventHeadlinePatterns = [
     #"\b(?:review|opinion|commentary)\s*[–—-]|\|\s*[^|]{3,40}$|\bin pictures\s*$|^\s*(?:tv tonight|friday briefing)\s*[:：]"#,
     #"^\s*(?:专访|访谈|人物|人物志|评论|观点|专栏|解读|观察|盘点|揭秘|如何|为何|为什么|什么是|一文读懂)"#,
     #"(?:人物专访|深度访谈|独家专访|破局之道|从来没有像我这样的人)"#,
-    #"^\s*[^：:]{1,12}(?:印象|观察)[：:]|^\s*[（(]乡村行|[？?]\s*$"#
+    #"^\s*[^：:]{1,12}(?:印象|观察)[：:]|^\s*[（(]乡村行|[？?]\s*$"#,
+    // Features led by a quotation ('From blue to blue': …, “从薪水到薪水”：…) and why/how after a colon.
+    #"^\s*[\"'‘“「][^：:]{1,30}[\"'’”」]\s*[：:]"#,
+    #"[：:]\s*(?:why|how|what)\b|[：:]\s*(?:为什么|为何|如何|怎样)"#,
+    #"(?:走进|探访|巡游|打卡|之旅|背后的|的故事|慢表达|看见|寻味|漫步)"#,
+    #"\b(?:says?|said)\s+(?:she|he|they|i)\s+(?:loved?|likes?|enjoy|felt|feels|wanted|hopes?)\b|说[，,]?\s*(?:她|他)(?:喜欢|热爱|享受|希望)"#,
+    // Question-led headlines, podcasts and prescriptions are commentary, not reports.
+    #"^\s*(?:can|will|is|are|do|does|should|could|would|has|have)\b[^?]*\?|^\s*(?:listen|watch|live)\s*[:：]|\b(?:must|should)\s+(?:be|not)\b"#,
+    #"(?:新路径|新模式|新篇章|新气象|新答卷|的底气|的坚守|见证中国)"#,
+    // Anticipation rather than something that already happened.
+    #"\b(?:set to|braces? for|fears?|plans? (?:for|to)|to (?:spread|sweep))\b|担心|将(?:蔓延|席卷)|做准备|计划"#
 ].compactMap { try? NSRegularExpression(pattern: $0, options: .caseInsensitive) }
 private let explanatoryQuestion = try! NSRegularExpression(pattern: #"(?:^|[.!?]\s+)\s*(?:how|why|what|who|where)\b"#, options: .caseInsensitive)
 private let reportedAction = try! NSRegularExpression(pattern: #"\b(?:killed|injured|wounded|attacked|bombed|arrested|strikes|airstrikes|forced to flee)\b"#, options: .caseInsensitive)
+
+// "Something happened": an action or outcome verb. Speech verbs (says, 表示, 称) are deliberately absent,
+// so quote-only headlines need another action to count as events.
+private let eventActionPattern = try! NSRegularExpression(pattern: #"\b(?:kill(?:s|ed)?|dies|died|dead|injur(?:es|ed)|wound(?:s|ed)|attack(?:s|ed)|bomb(?:s|ed|ing)|strikes?|struck|shoot(?:s|ing)|shot|arrest(?:s|ed)|detain(?:s|ed)|charg(?:es|ed)|convict(?:s|ed)|sentenc(?:es|ed)|jail(?:s|ed)|sues?|sued|crash(?:es|ed)|collid(?:es|ed)|explo(?:des|ded|sion)|erupts?|hits?|floods?|burn(?:s|ed)|collaps(?:es|ed)|evacuat(?:es|ed)|win(?:s)?|won|beat(?:s)?|stuns?|stunned|defeat(?:s|ed)?|upset|clinch(?:es|ed)|elect(?:s|ed)|vot(?:es|ed)|pass(?:es|ed)|approv(?:es|ed)|reject(?:s|ed)|ban(?:s|ned)|sign(?:s|ed)|launch(?:es|ed)|unveil(?:s|ed)|announc(?:es|ed)|releas(?:es|ed)|issu(?:es|ed)|open(?:s|ed)|clos(?:es|ed)|resign(?:s|ed)|fir(?:es|ed)|appoint(?:s|ed)|nam(?:es|ed)|meet(?:s)?|met|visit(?:s|ed)|agree(?:s|d)?|deal|seiz(?:es|ed)|raid(?:s|ed)|invad(?:es|ed)|captur(?:es|ed)|withdraw(?:s|n)?|cut(?:s)?|rais(?:es|ed)|hik(?:es|ed)|surg(?:es|ed)|plung(?:es|ed)|soar(?:s|ed)|tumbl(?:es|ed)|ris(?:es|en)|rose|fall(?:s|en)?|fell|drop(?:s|ped)|jump(?:s|ed)|slump(?:s|ed)|record(?:s|ed)?|acquir(?:es|ed)|buy(?:s)?|bought|sell(?:s)?|sold|merg(?:es|ed)|lay(?:s)? off|halt(?:s|ed)|suspend(?:s|ed)|block(?:s|ed)|recall(?:s|ed)|land(?:s|ed)|held|holds?|kick(?:s|ed) off|ends?|ended|begins?|began|starts?|started|confirm(?:s|ed)|report(?:s|ed)|warn(?:s|ed)|order(?:s|ed)|deploy(?:s|ed)|fin(?:es|ed)|grant(?:s|ed)|award(?:s|ed)|scor(?:es|ed)|qualif(?:ies|ied)|retir(?:es|ed)|fail(?:s|ed)?|gather(?:s|ed)|rall(?:y|ies|ied)|protest(?:s|ed)|defect(?:s|ed)|host(?:s|ed)|derail(?:s|ed)|downgrad(?:es|ed)|upgrad(?:es|ed)|fle(?:e|es|d)|forced|displac(?:es|ed)|blockad(?:es|ed)|chok(?:es|ed) off)\b|发生|主办|公映|上映|放映|逃离|首演|首映|首发|开工|竣工|揭牌|挂牌|齐聚|出轨|脱轨|撞上|调降|下调|上调|通报|接受审查|被查|落马|新高|新低|举行|举办|召开|开幕|闭幕|发布|发行|宣布|公布|出台|实施|签署|通过|批准|否决|当选|任命|辞职|会见|会谈|访问|抵达|启动|开通|成立|落地|投产|遇难|死亡|身亡|受伤|袭击|爆炸|坠毁|相撞|起火|失火|地震|洪水|击败|战胜|夺冠|获胜|晋级|逮捕|拘留|起诉|判处|罚款|上涨|下跌|大涨|大跌|暴跌|飙升|收购|裁员|停产|停飞|撤离|撤军|部署|增兵|空袭|发射|试射|宣判|破获|查处|立案|降息|加息|突破|创下|刷新纪录"#, options: .caseInsensitive)
+
+/// Events-only keeps headlines that report something that happened: an action verb and no feature, opinion
+/// or interview marker. Disasters always count. This is a title heuristic, not a semantic classifier.
+func isEventHeadline(_ event: WorldEvent) -> Bool {
+    if event.disaster { return true }
+    if isNonEventHeadline(event) { return false }
+    return [event.title, event.translatedTitle].compactMap { $0 }.contains { title in
+        eventActionPattern.firstMatch(in: title, range: NSRange(title.startIndex..., in: title)) != nil
+    }
+}
 
 func isNonEventHeadline(_ event: WorldEvent) -> Bool {
     guard !event.disaster else { return false }
@@ -179,11 +203,11 @@ private struct NewsFilterMatcher {
         blocked = KeywordMatcher(filter.blocked)
     }
     func allows(_ event: WorldEvent) -> Bool {
-        if filter.mode != .personal { return !filter.eventsOnly || !isNonEventHeadline(event) }
+        if filter.mode != .personal { return !filter.eventsOnly || isEventHeadline(event) }
         let titles = followed.isEmpty && blocked.isEmpty ? [] : [event.title, event.translatedTitle].compactMap { $0 }.map(normalizedKeyword)
         if titles.contains(where: blocked.matches) { return false }
         let matchesFollowed = titles.contains(where: followed.matches)
-        if filter.eventsOnly && !matchesFollowed && isNonEventHeadline(event) { return false }
+        if filter.eventsOnly && !matchesFollowed && !isEventHeadline(event) { return false }
         if filter.followOnly { return matchesFollowed }
         return matchesFollowed || (!filter.excludedCategories.contains(event.category.rawValue) && !filter.excludedSources.contains(event.sourceID))
     }

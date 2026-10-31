@@ -1,6 +1,6 @@
 # 世界动态 · Mac 桌面组件
 
-原生 Swift / AppKit / SwiftUI 配套应用与四种 WidgetKit 桌面组件。英文标题自动译为中文（悬停可看原文），点击标题打开原报道。当前版本 2.8（build 29），使用用户自己的 Apple Development 团队签名。
+原生 Swift / AppKit / SwiftUI 配套应用与四种 WidgetKit 桌面组件。英文标题自动译为中文（悬停可看原文），点击标题打开原报道。当前版本 2.8（build 30），使用用户自己的 Apple Development 团队签名。
 
 ## 使用
 
@@ -171,3 +171,7 @@ App 独立运行截图循环，只抓已选城市，同时最多四城；某城�
 - **新增官方点位**：香港运输署交通快照 6 个（中环干诺道中、毕打街、铜锣湾怡和街、时代广场附近、金钟夏悫道、尖沙咀梳士巴利道，约 2 分钟更新）；伦敦 TfL 7 个（Piccadilly Circus、Parliament Square、Tower Bridge、Regent St、Marble Arch、Hyde Park Corner、Strand）；洛杉矶 Caltrans 2 个（US-101 Hollywood Blvd、Santa Monica Blvd）；纽约 SkylineWebcams 1 个（Times Square Podcast View）。
 - 扩大搜索后仍无新增的：SkylineWebcams 的东京、台北、伦敦镜头预览图已停更数月至数年；台湾高速公路局只提供 MJPEG 视频流且为高速公路镜头，未采用；纽约交通局接口本机仍无法连接。
 - 实景日志改用 `Logger`（subsystem `local.michael.worldwatch`，category `camera`）并标为公开，可用 `/usr/bin/log show --predicate 'subsystem == "local.michael.worldwatch"'` 查看每轮每城选用的镜头与状态；此前 `NSLog` 在本系统上被记为 `<private>`。
+
+## 2.8 build 30：事件类新闻筛选
+
+「只看事件类新闻」（设置 → 新闻过滤，或主窗口范围菜单）改为白名单加黑名单：标题（原文或译文）须含表示已发生的动作或结果的词（如 kills、wins、beats、launches、fails、发生、举行、发布、开幕、遇难、击败、出轨、首演），并且不含访谈、评论、解读、特写、预告、软文特征（引语开头加冒号、冒号后的为什么／如何、句首疑问句、must／should、「某人说她喜欢」、set to／担心／计划、走进／探访／新路径等）。单独的「说／表示／称」不算事件。灾害始终保留。按标题规则判断，不理解语义，可能误判。曾评估 macOS 本机 Apple 智能模型，本机不符合硬件条件（`deviceNotEligible`），未采用。
