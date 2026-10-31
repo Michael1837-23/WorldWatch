@@ -347,7 +347,7 @@ struct EventRow: View {
                 HStack(spacing: 6) {
                     Text(event.sourceName).fontWeight(.semibold).foregroundStyle(.secondary)
                     if let date = event.date {
-                        Text((event.timeKind == "发生" ? "发生 " : "") + shortTimeLabel(date)).monospacedDigit().foregroundStyle(.tertiary)
+                        Text((event.timeKind == "发生" ? "发生 " : "") + (eventTimeLabel(event) ?? shortTimeLabel(date))).monospacedDigit().foregroundStyle(.tertiary)
                     }
                     if let severity = event.severity {
                         Text(severity).fontWeight(.medium).foregroundStyle(severity == "红色预警" ? Color.red : Color.orange)

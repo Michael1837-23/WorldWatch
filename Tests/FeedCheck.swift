@@ -3,6 +3,11 @@ import CoreGraphics
 import ImageIO
 import UniformTypeIdentifiers
 
+func cameraHTTPDateString(_ date: Date) -> String {
+    let formatter = DateFormatter(); formatter.locale = Locale(identifier: "en_US_POSIX"); formatter.timeZone = TimeZone(secondsFromGMT: 0)
+    formatter.dateFormat = "EEE, dd MMM yyyy HH:mm:ss Z"; return formatter.string(from: date)
+}
+
 @main struct FeedCheck {
     static func main() async throws {
         if CommandLine.arguments.contains("--map-layers") {
@@ -329,7 +334,12 @@ import UniformTypeIdentifiers
         assert(eventTitle("北海道特急深夜撞熊出轨 乘客被迫车内过夜", "cna") && eventTitle("Rival US and Russian resolutions on Western Sahara fail at UN"))
         assert(!eventTitle("Britain’s Prime Minister Says He’s Open to a Formal Apology"), "只有「说」没有动作不算事件")
         assert(eventTitle("Players' union strikes over pay cuts"), "所有格撇号不误判为引语开头")
-        print("PASS: 事件类新闻判断、国内新闻占比上限、最新置顶、旧条目顺次下移、无新增不轮换、模式切换与兼容、小尺寸最新显示")
+        let unSource = NewsSource.all.first { $0.id == "un" }!
+        let unXML = "<rss><channel><item><title>Somalia looks to the future</title><link>https://news.un.org/en/story/1</link><pubDate>\(cameraHTTPDateString(Date()))</pubDate></item></channel></rss>"
+        let unEvents = try parseFeed(Data(unXML.utf8), source: unSource)
+        assert(unEvents[0].timeKind == "日期" && unEvents[0].date! <= Date() && ["今天", "昨天"].contains(eventTimeLabel(unEvents[0]) ?? ""), "只有日期的来源不显示占位时刻，也不排到当前时间之后")
+        assert(plausiblePublishDate(Date().addingTimeInterval(1200)) == nil && plausiblePublishDate(Date().addingTimeInterval(120)) != nil, "超过 5 分钟的未来时间视为未知")
+        print("PASS: 只有日期的来源与未来时间、事件类新闻判断、国内新闻占比上限、最新置顶、旧条目顺次下移、无新增不轮换、模式切换与兼容、小尺寸最新显示")
         let recentNews = (0..<160).map { index in
             headline("limited-\(index)", "News item \(index)", index.isMultiple(of: 2) ? "bbc" : "guardian", Double(index))
         }

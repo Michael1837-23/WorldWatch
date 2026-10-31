@@ -15,6 +15,8 @@ struct NewsSource: Identifiable, Sendable {
     var category: NewsCategory = .world
     var domestic: Bool = false
     var language: String = "en"
+    /// The feed stamps every item with the same placeholder clock time (UN News uses 12:00 UTC), so only the date is real.
+    var dateOnly = false
     static let all: [NewsSource] = [
         .init(id: "bbc-zh", name: "BBC 中文", url: URL(string: "https://feeds.bbci.co.uk/zhongwen/simp/rss.xml")!, detail: "中文国际报道", disaster: false),
         .init(id: "bbc", name: "BBC World", url: URL(string: "https://feeds.bbci.co.uk/news/world/rss.xml")!, detail: "全球国际新闻 · 英文", disaster: false),
@@ -41,7 +43,7 @@ struct NewsSource: Identifiable, Sendable {
         .init(id: "nyt", name: "NYT World", url: URL(string: "https://rss.nytimes.com/services/xml/rss/nyt/World.xml")!, detail: "纽约时报国际报道 · 英文", disaster: false),
         .init(id: "aljazeera", name: "Al Jazeera", url: URL(string: "https://www.aljazeera.com/xml/rss/all.xml")!, detail: "半岛电视台国际报道 · 英文", disaster: false),
         .init(id: "defense", name: "Defense News", url: URL(string: "https://www.defensenews.com/arc/outboundfeeds/rss/?outputType=xml")!, detail: "国防与军事产业 · 英文", disaster: false, category: .politics),
-        .init(id: "un", name: "联合国新闻", url: URL(string: "https://news.un.org/feed/subscribe/en/news/all/rss.xml")!, detail: "联合国官方新闻 · 英文", disaster: false),
+        .init(id: "un", name: "联合国新闻", url: URL(string: "https://news.un.org/feed/subscribe/en/news/all/rss.xml")!, detail: "联合国官方新闻 · 英文", disaster: false, dateOnly: true),
         .init(id: "usgs", name: "USGS", url: URL(string: "https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/significant_week.geojson")!, detail: "近七天显著地震 · 官方数据", disaster: true),
         .init(id: "gdacs", name: "GDACS", url: URL(string: "https://www.gdacs.org/xml/rss.xml")!, detail: "橙色／红色灾害预警", disaster: true)
     ]
@@ -576,6 +578,16 @@ func shortTimeLabel(_ date: Date, now: Date = Date()) -> String {
     return date.formatted(Date.FormatStyle(locale: Locale(identifier: "zh_CN")).month(.defaultDigits).day())
 }
 
+/// Row time label. Date-only sources show 今天／昨天／日期 instead of a placeholder clock time.
+func eventTimeLabel(_ event: WorldEvent, now: Date = Date()) -> String? {
+    guard let date = event.date else { return nil }
+    guard event.timeKind == "日期" else { return shortTimeLabel(date, now: now) }
+    let calendar = Calendar.current
+    if calendar.isDate(date, inSameDayAs: now) { return "今天" }
+    if let yesterday = calendar.date(byAdding: .day, value: -1, to: now), calendar.isDate(date, inSameDayAs: yesterday) { return "昨天" }
+    return date.formatted(Date.FormatStyle(locale: Locale(identifier: "zh_CN")).month(.defaultDigits).day())
+}
+
 func parseDate(_ text: String?) -> Date? {
     guard let text = text?.trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty else { return nil }
     for formatter in isoDateFormatters { if let date = formatter.date(from: text) { return date } }
@@ -615,7 +627,8 @@ func cleanTitle(_ text: String) -> String {
 /// A wrong feed timezone or typo can put a story days ahead and pin it to the top of "最新".
 /// Treat implausible future publish times as unknown rather than trusting them.
 func plausiblePublishDate(_ date: Date?, now: Date = Date()) -> Date? {
-    guard let date, date > now.addingTimeInterval(3600) else { return date }
+    // A few minutes covers clock skew; anything later is a placeholder or a wrong time zone, not a real publish time.
+    guard let date, date > now.addingTimeInterval(300) else { return date }
     return nil
 }
 
@@ -664,9 +677,15 @@ final class RSSReader: NSObject, XMLParserDelegate {
         let alert = fields["gdacs:alertlevel"]?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         if source.id == "gdacs", alert != "red", alert != "orange" { return }
         let occurrence = source.id == "gdacs" ? parseDate(fields["gdacs:fromdate"]) : nil
+        var published = parseDate(fields["pubdate"] ?? fields["dc:date"] ?? fields["published"] ?? fields["updated"])
+        if source.dateOnly, let day = published {
+            // Keep the calendar day only: start of that UTC day, so a placeholder noon never sorts above real news.
+            var utc = Calendar(identifier: .gregorian); utc.timeZone = TimeZone(secondsFromGMT: 0)!
+            published = utc.startOfDay(for: day)
+        }
         events.append(WorldEvent(id: source.id + ":" + url.absoluteString, sourceID: source.id, title: title, url: url,
-                                 date: occurrence ?? plausiblePublishDate(parseDate(fields["pubdate"] ?? fields["dc:date"] ?? fields["published"] ?? fields["updated"])),
-                                 timeKind: occurrence != nil ? "发生" : "发布", disaster: source.disaster,
+                                 date: occurrence ?? plausiblePublishDate(published),
+                                 timeKind: occurrence != nil ? "发生" : source.dateOnly ? "日期" : "发布", disaster: source.disaster,
                                  severity: alert == "red" ? "红色预警" : alert == "orange" ? "橙色预警" : nil,
                                  translatedTitle: source.language == "zh" ? title.applyingTransform(StringTransform("Traditional-Simplified"), reverse: false) : nil,
                                  latitude: fields["geo:lat"].flatMap { Double($0.trimmingCharacters(in: .whitespacesAndNewlines)) },

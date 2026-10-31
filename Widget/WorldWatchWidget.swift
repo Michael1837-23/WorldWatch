@@ -153,7 +153,7 @@ struct WidgetRow: View {
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 4) {
                     Text(event.sourceName).fontWeight(.semibold)
-                    if let date = event.date { Text(shortTimeLabel(date)).monospacedDigit() }
+                    if let label = eventTimeLabel(event) { Text(label).monospacedDigit() }
                     if let severity = event.severity {
                         Text(severity).foregroundStyle(severity == "红色预警" ? Color.red : Color.orange)
                     }
@@ -364,7 +364,7 @@ struct WorldLiveWidget: Widget {
 
 @main struct WorldWatchWidgets: WidgetBundle {
     init() {
-        NSLog("世界动态组件目录 2.8/30：WorldWatchNews、WorldWatchDashboard、WorldWatchMap、WorldWatchLive")
+        NSLog("世界动态组件目录 2.8/31：WorldWatchNews、WorldWatchDashboard、WorldWatchMap、WorldWatchLive")
     }
     var body: some Widget {
         WorldWatchWidget()
