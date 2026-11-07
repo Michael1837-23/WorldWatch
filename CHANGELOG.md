@@ -1,6 +1,6 @@
 # 更新日志
 
-版本号为 `CFBundleShortVersionString`（构建号）。每个版本的测试、安装与系统日志证据见 `docs/acceptance/`；交给 Codex 实现的任务说明见 `docs/codex-tasks/`。
+版本号为 `CFBundleShortVersionString`（构建号）。每个版本的测试、安装与系统日志证据见 `docs/acceptance/`；交给 Codex 实现的任务说明见 `docs/codex-tasks/`；新功能动手前的算法评测见 `docs/evaluation/`。
 
 ## 2.8 build 31
 

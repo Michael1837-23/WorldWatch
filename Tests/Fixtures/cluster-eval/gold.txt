@@ -1,0 +1,77 @@
+# Gold labels for Tests/Fixtures/cluster-eval/corpus.json (numbers are positions in that JSON array).
+# E <name>: one news event — these headlines should be merged into one story.
+# G <name>: a related-story group (event names or positions) — merging inside a group is tolerated.
+# Same E = should be merged. Same G (or a pair labeled R) = merging is tolerated. Anything else = must not merge.
+E paraguay: 19 27 51 61 87 109 111 127 142 159 163 169 180 183 237 395 490 491 494 541
+E bomb: 60 202 216 243 289 290 291 296 310 315 318 349 353 381 394 423 450 533 537 543 600
+E miller: 105 133 138 151 156 161 179 194 201 225 231 235 255
+E pope: 129 155 189 220 251 256 365 497 508
+E kenya: 215 222 360 369 372
+E amsterdam: 66 263 264 308
+E cybertruck: 207 208 209 292 361 363 430 431 444
+E markle: 157 204 206 269
+E midterm-world: 366 462 645 362
+E iran-qeshm: 68 73 103 150
+E boe: 540 544 574 576 581 583 584 135
+E wong: 501 552 613 620
+E macau: 413 488
+E ai-selloff: 212 213 214 273 274 323 324 408 468 495 272 391 294
+E ai-rebound: 226 227 228
+E alcaraz: 16 197
+E busan: 55 188 196
+E cornell: 99 172
+E forex: 20 39
+E gushen: 93 164
+E brand-barrister: 244 300
+E brand-verdict: 302 412 438 547 566 166
+E antarctic: 59 137
+E the-pitt: 594 630
+E nz: 1 2 11 17 171 612
+E german-plane: 191 327
+E meta-lawsuit: 510 525
+E clemency: 368 517
+E french-bus: 339 352
+E israel-gov: 32 538 407 195 516
+E anc: 427 665
+E tanzania: 282 367
+E mafs: 36 554 588
+E mofcom: 69 144
+E midterm-economy: 614 658
+E ronaldo: 591 382 570 582
+E khawaja: 30 184
+E musk-midterms: 597 633 642 643
+E midterm-israel: 409 641
+E midterm-ukraine: 265 461
+E midterm-iran: 13 186
+E heli-call: 67 165
+E panda: 65 100
+E diesel: 229 404
+G midterms: midterm-world midterm-economy musk-midterms midterm-israel midterm-ukraine midterm-iran 601 433 632 646 24 242 285 92 297 321 89 221 262 200 63 241 246 303 329 385 410 286 608 25 ai-selloff ai-rebound 248 254 531 609
+G ai-market: ai-selloff ai-rebound 329 286 312 330
+G iran: iran-qeshm midterm-iran 601 167 279 345 482
+G us-china: busan heli-call mofcom
+G hk-macau: wong macau 624
+G brand: brand-barrister brand-verdict
+G israel: israel-gov midterm-israel 595 25 233
+G ciie: 77 85 86 94 97 98 104 114
+G xuanjiang: 145 146 148 149
+G pope-other: pope 639
+G hockey: 313 406 667 562
+# adjudication round 1 additions
+E ebola-uk: 523 652
+E poundland: 606 619
+E global-health: 241 288
+E bolsonaro: 528 532
+E salaries: 348 471
+E frieda: 571 674
+E spain-rail-probe: 141 280
+G ebola: ebola-uk 635
+G mississippi: 245 247
+G hybrid-threats: bomb 334
+G tccf: 81 106 112
+G markle-family: markle 542
+G france-protests: 47 377
+G ukraine-war: 38 298
+G anthropic-ipo: 329 330
+G ai-debt: 293 447
+G gifts: 239 364
