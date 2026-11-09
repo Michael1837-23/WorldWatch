@@ -13,7 +13,7 @@ mode=${1:-}
 [[ $# -gt 0 ]] && shift
 if [[ $mode == collect ]]; then
   swiftc -swift-version 5 -parse-as-library -module-cache-path "$PWD/.build/module-cache" \
-    Sources/Feed.swift Sources/WorldMapData.swift Sources/WorldMap.swift Sources/MapLayers.swift \
+    Sources/Feed.swift Sources/Stories.swift Sources/WorldMapData.swift Sources/WorldMap.swift Sources/MapLayers.swift \
     Sources/CameraSources.swift Sources/CameraSnapshots.swift Sources/TitleTranslation.swift \
     Tools/cluster-eval/collect/main.swift -o .build/cluster-eval/collect
   exec .build/cluster-eval/collect "$@"

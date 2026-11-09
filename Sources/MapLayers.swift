@@ -364,7 +364,7 @@ actor MapLayerService {
             let remaining = deadline.timeIntervalSinceNow
             guard remaining > 0 else { throw URLError(.timedOut) }
             var request = URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData, timeoutInterval: max(0.1, remaining))
-            request.setValue("WorldWatch/2.8", forHTTPHeaderField: "User-Agent")
+            request.setValue("WorldWatch/2.9", forHTTPHeaderField: "User-Agent")
             let configuration = URLSessionConfiguration.ephemeral
             configuration.timeoutIntervalForResource = max(0.1, remaining)
             let session = URLSession(configuration: configuration)

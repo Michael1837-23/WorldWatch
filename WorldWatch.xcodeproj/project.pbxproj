@@ -25,6 +25,8 @@
 		8BE19D8D72F14D058745CA26 /* Sources/CameraSources.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7BE19D8D72F14D058745CA26; };
 		9BE19D8D72F14D058745CA26 /* Sources/CameraSources.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7BE19D8D72F14D058745CA26; };
 		A12700000000000000000001 /* Sources/MapLayers.swift in Sources */ = {isa = PBXBuildFile; fileRef = A12700000000000000000003; };
+		A12900000000000000000001 /* Sources/Stories.swift in Sources */ = {isa = PBXBuildFile; fileRef = A12900000000000000000003; };
+		A12900000000000000000002 /* Sources/Stories.swift in Sources */ = {isa = PBXBuildFile; fileRef = A12900000000000000000003; };
 		A12700000000000000000002 /* Sources/MapLayers.swift in Sources */ = {isa = PBXBuildFile; fileRef = A12700000000000000000003; };
 /* End PBXBuildFile section */
 
@@ -68,6 +70,7 @@
 		E0AF200828D9A42BDE31090C /* Sources/WorldComponents.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/WorldComponents.swift; sourceTree = "<group>"; };
 		7BE19D8D72F14D058745CA26 /* Sources/CameraSources.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/CameraSources.swift; sourceTree = "<group>"; };
 		A12700000000000000000003 /* Sources/MapLayers.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/MapLayers.swift; sourceTree = "<group>"; };
+		A12900000000000000000003 /* Sources/Stories.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Sources/Stories.swift; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFrameworksBuildPhase section */
@@ -101,6 +104,7 @@
 			isa = PBXGroup;
 			children = (
 				A12700000000000000000003 /* Sources/MapLayers.swift */,
+				A12900000000000000000003 /* Sources/Stories.swift */,
 				9C8E3C2ED9F709BCE0D86589 /* Sources/WorldMapData.swift */,
 				36CBA806AB64D570D537E85F /* Sources/WorldMap.swift */,
 				B158B91888D30F3F6464613A /* Sources/CameraSnapshots.swift */,
@@ -220,6 +224,7 @@
 			files = (
 				5FBD7114D68860CF5594956F /* Sources/WorldMapData.swift in Sources */,
 				A12700000000000000000002 /* Sources/MapLayers.swift in Sources */,
+				A12900000000000000000002 /* Sources/Stories.swift in Sources */,
 				632EEC28D5D46D7BD63BA3F0 /* Sources/WorldMap.swift in Sources */,
 				5450D7FCB3447E62A3F7E361 /* Sources/CameraSnapshots.swift in Sources */,
 				9BE19D8D72F14D058745CA26 /* Sources/CameraSources.swift in Sources */,
@@ -236,6 +241,7 @@
 			files = (
 				FA7E0520D0C64C09C92D1268 /* Sources/WorldMapData.swift in Sources */,
 				A12700000000000000000001 /* Sources/MapLayers.swift in Sources */,
+				A12900000000000000000001 /* Sources/Stories.swift in Sources */,
 				1EC6C214E1EF52EBD7EB0908 /* Sources/WorldMap.swift in Sources */,
 				EA639130368EB985DD973635 /* Sources/CameraSnapshots.swift in Sources */,
 				8BE19D8D72F14D058745CA26 /* Sources/CameraSources.swift in Sources */,

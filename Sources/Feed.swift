@@ -17,6 +17,8 @@ struct NewsSource: Identifiable, Sendable {
     var language: String = "en"
     /// The feed stamps every item with the same placeholder clock time (UN News uses 12:00 UTC), so only the date is real.
     var dateOnly = false
+    /// Aggregator feeds (Google News) carry the real publisher in `<source>`; it is shown and counted as the outlet.
+    var aggregator = false
     static let all: [NewsSource] = [
         .init(id: "bbc-zh", name: "BBC 中文", url: URL(string: "https://feeds.bbci.co.uk/zhongwen/simp/rss.xml")!, detail: "中文国际报道", disaster: false),
         .init(id: "bbc", name: "BBC World", url: URL(string: "https://feeds.bbci.co.uk/news/world/rss.xml")!, detail: "全球国际新闻 · 英文", disaster: false),
@@ -43,6 +45,9 @@ struct NewsSource: Identifiable, Sendable {
         .init(id: "nyt", name: "NYT World", url: URL(string: "https://rss.nytimes.com/services/xml/rss/nyt/World.xml")!, detail: "纽约时报国际报道 · 英文", disaster: false),
         .init(id: "aljazeera", name: "Al Jazeera", url: URL(string: "https://www.aljazeera.com/xml/rss/all.xml")!, detail: "半岛电视台国际报道 · 英文", disaster: false),
         .init(id: "defense", name: "Defense News", url: URL(string: "https://www.defensenews.com/arc/outboundfeeds/rss/?outputType=xml")!, detail: "国防与军事产业 · 英文", disaster: false, category: .politics),
+        .init(id: "gn-zh", name: "Google 新闻·要闻", url: URL(string: "https://news.google.com/rss?hl=zh-CN&gl=CN&ceid=CN:zh-Hans")!, detail: "中文媒体要闻聚合 · 显示原媒体", disaster: false, language: "zh", aggregator: true),
+        .init(id: "gn-zh-world", name: "Google 新闻·国际", url: URL(string: "https://news.google.com/rss/topics/CAAqKggKIiRDQkFTRlFvSUwyMHZNRGx1YlY4U0JYcG9MVU5PR2dKRFRpZ0FQAQ?hl=zh-CN&gl=CN&ceid=CN:zh-Hans")!, detail: "中文国际新闻聚合 · 显示原媒体", disaster: false, language: "zh", aggregator: true),
+        .init(id: "gn-world", name: "Google News World", url: URL(string: "https://news.google.com/rss/topics/CAAqKggKIiRDQkFTRlFvSUwyMHZNRGx1YlY4U0JXVnVMVlZUR2dKVlV5Z0FQAQ?hl=en-US&gl=US&ceid=US:en")!, detail: "路透、美联社等英文国际新闻聚合 · 显示原媒体", disaster: false, aggregator: true),
         .init(id: "un", name: "联合国新闻", url: URL(string: "https://news.un.org/feed/subscribe/en/news/all/rss.xml")!, detail: "联合国官方新闻 · 英文", disaster: false, dateOnly: true),
         .init(id: "usgs", name: "USGS", url: URL(string: "https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/significant_week.geojson")!, detail: "近七天显著地震 · 官方数据", disaster: true),
         .init(id: "gdacs", name: "GDACS", url: URL(string: "https://www.gdacs.org/xml/rss.xml")!, detail: "橙色／红色灾害预警", disaster: true)
@@ -64,8 +69,16 @@ struct WorldEvent: Identifiable, Codable, Sendable {
     var magnitude: Double? = nil
     var eventType: String? = nil
     var endDate: Date? = nil
+    var publisher: String? = nil
+    // Story facts copied in by the app (Sources/Stories.swift); absent when the widget fetched on its own.
+    var storyID: String? = nil
+    var storyOutlets: [String]? = nil
+    var storyHeat: Double? = nil
+    var storyLead: Bool? = nil
+    var storyFirstDate: Date? = nil
+    var breakingUntil: Date? = nil
     var displayTitle: String { translatedTitle ?? title }
-    var sourceName: String { NewsSource.all.first { $0.id == sourceID }?.name ?? sourceID }
+    var sourceName: String { publisher ?? NewsSource.all.first { $0.id == sourceID }?.name ?? sourceID }
     var isDomestic: Bool { NewsSource.all.first { $0.id == sourceID }?.domestic ?? false }
     var category: NewsCategory {
         if disaster { return .disaster }
@@ -231,8 +244,8 @@ struct SourceSnapshot: Codable, Sendable {
 }
 
 enum NewsDisplayMode: String, Codable, CaseIterable, Sendable {
-    case latest, rotation
-    var title: String { self == .latest ? "最新优先" : "综合轮播" }
+    case latest, rotation, hot
+    var title: String { self == .latest ? "最新优先" : self == .rotation ? "综合轮播" : "热点优先" }
     private static var preferences: UserDefaults {
         let group = Bundle.main.object(forInfoDictionaryKey: "WorldWatchAppGroup") as? String
         return group.flatMap { UserDefaults(suiteName: $0) } ?? .standard
@@ -276,13 +289,16 @@ let retainedNewsLimit = 100
 /// occurrence times are usually older than the news stream, so a shared cap would drop every map marker.
 func limitedSourceFeeds(_ feeds: [String: SourceSnapshot]) -> [String: SourceSnapshot] {
     let disasterIDs = Set(NewsSource.all.filter(\.disaster).map(\.id))
-    let latest = feeds.filter { !disasterIDs.contains($0.key) }.flatMap { id, feed in feed.events.map { (id, $0) } }.sorted {
+    // Lead headlines of multi-outlet stories are exempt too, so the hottest stories survive the cap.
+    func isLead(_ event: WorldEvent) -> Bool { event.storyLead == true && (event.storyOutlets?.count ?? 0) >= 2 }
+    let leads = feeds.filter { !disasterIDs.contains($0.key) }.flatMap { id, feed in feed.events.filter(isLead).map { (id, $0) } }
+    let latest = feeds.filter { !disasterIDs.contains($0.key) }.flatMap { id, feed in feed.events.filter { !isLead($0) }.map { (id, $0) } }.sorted {
         let first = $0.1.date ?? .distantPast, second = $1.1.date ?? .distantPast
         if first != second { return first > second }
         if $0.1.id != $1.1.id { return $0.1.id < $1.1.id }
         return $0.0 < $1.0
     }.prefix(retainedNewsLimit)
-    let grouped = Dictionary(grouping: latest, by: { $0.0 })
+    let grouped = Dictionary(grouping: Array(latest) + leads, by: { $0.0 })
     return feeds.mapValues { feed in
         var result = feed
         result.events = []
@@ -382,15 +398,19 @@ func balancedByOrigin(_ events: [WorldEvent], ratio: Double?) -> [WorldEvent] {
 }
 
 func latestEvents(_ events: [WorldEvent], limit: Int = 64, now: Date = Date(), domesticRatio: Double? = DomesticShare.selected.ratio, filter: NewsFilter = NewsFilter()) -> [WorldEvent] {
-    Array(balancedByOrigin(uniqueNewsEvents(applyNewsFilter(events, filter: filter), mergeTopics: false, now: now), ratio: domesticRatio).prefix(limit))
+    Array(balancedByOrigin(collapsedStories(uniqueNewsEvents(applyNewsFilter(events, filter: filter), mergeTopics: false, now: now)), ratio: domesticRatio).prefix(limit))
 }
 
 func displayPool(_ events: [WorldEvent], mode: NewsDisplayMode, now: Date = Date(), filter: NewsFilter = NewsFilter()) -> [WorldEvent] {
-    mode == .latest ? latestEvents(events, now: now, filter: filter) : digestPool(events, now: now, filter: filter)
+    switch mode {
+    case .latest: return latestEvents(events, now: now, filter: filter)
+    case .rotation: return digestPool(events, now: now, filter: filter)
+    case .hot: return hotEvents(events, now: now, filter: filter)
+    }
 }
 
 func digestPool(_ events: [WorldEvent], perCategory: Int = 8, now: Date = Date(), filter: NewsFilter = NewsFilter()) -> [WorldEvent] {
-    let unique = uniqueNewsEvents(applyNewsFilter(events, filter: filter), perCategory: perCategory, now: now)
+    let unique = collapsedStories(uniqueNewsEvents(applyNewsFilter(events, filter: filter), perCategory: perCategory, now: now))
     let grouped = Dictionary(grouping: unique, by: \.category)
     let order: [NewsCategory] = [.domestic, .world, .finance, .technology, .entertainment, .politics, .sports, .disaster]
     var result: [WorldEvent] = []
@@ -435,7 +455,8 @@ func rotationTimeline(_ snapshot: NewsSnapshot, now: Date = Date(), minutes: Int
 
 func widgetTimeline(_ snapshot: NewsSnapshot, now: Date = Date(), pageSize: Int = 4, filter: NewsFilter = NewsFilter()) -> [NewsSnapshot] {
     let all = snapshot.sourceFeeds?.values.flatMap(\.events) ?? snapshot.rotationEvents ?? snapshot.events
-    if snapshot.mode == .rotation {
+    let mode = effectiveDisplayMode(snapshot, now: now)
+    if mode == .rotation {
         var rotating = snapshot
         rotating.rotationEvents = digestPool(all, now: now, filter: filter)
         if (filter.mode == .personal || filter.eventsOnly) && rotating.rotationEvents?.isEmpty == true { rotating.note = filter.mode == .personal ? "没有符合个性设置的新闻" : "没有符合过滤条件的新闻" }
@@ -444,7 +465,8 @@ func widgetTimeline(_ snapshot: NewsSnapshot, now: Date = Date(), pageSize: Int 
     var entry = snapshot
     entry.checkedAt = snapshot.checkDate
     entry.date = now
-    entry.events = latestEvents(all, limit: pageSize, now: now, filter: filter)
+    entry.events = mode == .hot ? Array(hotEvents(all, now: now, filter: filter).prefix(pageSize)) : latestEvents(all, limit: pageSize, now: now, filter: filter)
+    entry.displayMode = mode
     if (filter.mode == .personal || filter.eventsOnly) && entry.events.isEmpty { entry.note = filter.mode == .personal ? "没有符合个性设置的新闻" : "没有符合过滤条件的新闻" }
     entry.rotationEvents = nil
     entry.conflictSignals = nil
@@ -461,14 +483,16 @@ func sameDigest(_ first: [WorldEvent], _ second: [WorldEvent]) -> Bool {
 
 func sameRenderedNews(_ first: [WorldEvent], _ second: [WorldEvent]) -> Bool {
     sameDigest(first, second) && first.map(\.displayTitle) == second.map(\.displayTitle)
+        && first.map { $0.storyOutlets ?? [] } == second.map { $0.storyOutlets ?? [] } && first.map(\.breakingUntil) == second.map(\.breakingUntil)
 }
 
 func widgetNewsChanged(from previous: NewsSnapshot?, to snapshot: NewsSnapshot, filter: NewsFilter, now: Date = Date()) -> Bool {
     guard let previous, previous.mode == snapshot.mode else { return true }
     func candidates(_ entry: NewsSnapshot) -> [WorldEvent] {
         let all = entry.sourceFeeds?.values.flatMap(\.events) ?? entry.rotationEvents ?? entry.events
-        let pool = displayPool(all, mode: entry.mode, now: now, filter: filter)
-        return entry.mode == .latest ? Array(pool.prefix(12)) : pool
+        let mode = effectiveDisplayMode(entry, now: now)
+        let pool = displayPool(all, mode: mode, now: now, filter: filter)
+        return mode == .rotation ? pool : Array(pool.prefix(12))
     }
     return !sameRenderedNews(candidates(previous), candidates(snapshot))
 }
@@ -672,7 +696,10 @@ final class RSSReader: NSObject, XMLParserDelegate {
         guard inItem else { return }
         if elementName != "item" && elementName != "entry" { depth -= 1; if !path.isEmpty { path.removeLast() }; return }
         inItem = false
-        let title = cleanTitle(fields["title"] ?? "")
+        var title = cleanTitle(fields["title"] ?? "")
+        let publisher = source.aggregator ? cleanTitle(fields["source"] ?? "").nilIfEmpty : nil
+        // Google News appends " - Publisher" to every title.
+        if let publisher, title.hasSuffix(" - " + publisher) { title = String(title.dropLast(publisher.count + 3)).trimmingCharacters(in: .whitespaces) }
         guard !title.isEmpty, let url = safeURL(fields["link"] ?? "") else { return }
         let alert = fields["gdacs:alertlevel"]?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         if source.id == "gdacs", alert != "red", alert != "orange" { return }
@@ -691,7 +718,7 @@ final class RSSReader: NSObject, XMLParserDelegate {
                                  latitude: fields["geo:lat"].flatMap { Double($0.trimmingCharacters(in: .whitespacesAndNewlines)) },
                                  longitude: fields["geo:long"].flatMap { Double($0.trimmingCharacters(in: .whitespacesAndNewlines)) },
                                  eventType: fields["gdacs:eventtype"]?.trimmingCharacters(in: .whitespacesAndNewlines).uppercased(),
-                                 endDate: parseDate(fields["gdacs:todate"])))
+                                 endDate: parseDate(fields["gdacs:todate"]), publisher: publisher))
     }
 }
 
@@ -741,7 +768,7 @@ func fetchSource(_ source: NewsSource, timeout: Double = 25) async throws -> [Wo
     var request = URLRequest(url: source.url)
     request.timeoutInterval = timeout
     request.cachePolicy = .reloadIgnoringLocalCacheData
-    request.setValue("WorldWatch/2.8 (personal desktop news reader)", forHTTPHeaderField: "User-Agent")
+    request.setValue("WorldWatch/2.9 (personal desktop news reader)", forHTTPHeaderField: "User-Agent")
     for attempt in 0..<2 {
         do {
             let (data, response) = try await newsSession.data(for: request)
@@ -754,4 +781,8 @@ func fetchSource(_ source: NewsSource, timeout: Double = 25) async throws -> [Wo
         } catch { throw error }
     }
     throw URLError(.cannotConnectToHost)
+}
+
+extension String {
+    var nilIfEmpty: String? { isEmpty ? nil : self }
 }

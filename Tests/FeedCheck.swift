@@ -870,6 +870,7 @@ func cameraHTTPDateString(_ date: Date) -> String {
         assert(twelve.count == 3 && abs(twelve[2].latitude - 17.9) < 0.15, "未来 12 小时约为两倍历史 6 小时步长")
         assert(cycloneForecast(MapCyclone(id: 2, name: "X", red: false, end: now, history: [], forecast: [])).isEmpty)
         print("PASS: 2.7 地震时限与震级标签、GDACS类型和结束时间、台风过滤/名称/乱序历史预测/60点上限、冲突评分/48小时/四级/15国/词边界、夏令时、天气数组及过期、ISS插值及经线断线、偏好迁移与过期缓存")
+        try storyChecks()
         if let index = CommandLine.arguments.firstIndex(of: "--fixtures"), CommandLine.arguments.count > index + 1 {
             let directory = CommandLine.arguments[index + 1]
             for (id, file) in [("bbc", "BBCWorld"), ("bbc-zh", "BBCChinese"), ("guardian", "Guardian"), ("usgs", "USGS")] {

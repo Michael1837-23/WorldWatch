@@ -66,7 +66,7 @@ struct WorldWatchProvider: TimelineProvider {
         }
         var entry = refreshedSnapshot(previous: previous, results: results, enabledIDs: enabledIDs, mode: NewsDisplayMode.selected)
         var pool = await TitleTranslator.shared.applyCache(to: entry.rotationEvents ?? entry.events)
-        let current = entry.mode == .latest ? Array(pool.prefix(9)) : rotationEvents(pool, at: Date(), limit: 6).events
+        let current = entry.mode == .rotation ? rotationEvents(pool, at: Date(), limit: 6).events : Array(pool.prefix(9))
         var translatedPage = current
         do { translatedPage = try await TitleTranslator.shared.translate(current) }
         catch {
@@ -148,11 +148,12 @@ struct FillingStack: Layout {
 struct WidgetRow: View {
     let event: WorldEvent
     let family: WidgetFamily
+    var hot = false
     var body: some View {
         Link(destination: event.url) {
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 4) {
-                    Text(event.sourceName).fontWeight(.semibold)
+                    Text(storySourceLine(event, expanded: hot && family != .systemSmall)).fontWeight(.semibold)
                     if let label = eventTimeLabel(event) { Text(label).monospacedDigit() }
                     if let severity = event.severity {
                         Text(severity).foregroundStyle(severity == "红色预警" ? Color.red : Color.orange)
@@ -160,7 +161,7 @@ struct WidgetRow: View {
                     Spacer(minLength: 4)
                 }
                 .font(.system(size: 10.5)).foregroundStyle(.secondary).lineLimit(1)
-                Text(event.displayTitle)
+                (isBreaking(event, now: Date()) ? Text("\(Text("突发 ").foregroundStyle(Color.red))\(event.displayTitle)") : Text(event.displayTitle))
                     .font(.system(size: family == .systemMedium ? 13 : 14, weight: .semibold))
                     .foregroundStyle(.primary)
                     .lineLimit(family == .systemSmall ? 5 : family == .systemMedium ? 2 : 3)
@@ -187,7 +188,7 @@ struct WorldWatchWidgetView: View {
             } else {
                 FillingStack(spacing: family == .systemLarge ? 9 : 7) {
                     ForEach(entry.events) { event in
-                        WidgetRow(event: event, family: family)
+                        WidgetRow(event: event, family: family, hot: entry.mode == .hot)
                             .transition(reduceMotion ? .opacity : .asymmetric(insertion: .move(edge: .top).combined(with: .opacity), removal: .opacity))
                     }
                 }
@@ -225,6 +226,7 @@ struct WorldComponentEntry: TimelineEntry {
     let cities: [CameraCity]
     let frames: [String: [CameraFrame]]
     let index: Int
+    var hot = false
 }
 
 struct WorldComponentProvider: TimelineProvider {
@@ -270,7 +272,9 @@ struct WorldComponentProvider: TimelineProvider {
         let layers = MapLayerStore.shared
         let ongoing = layers.ongoing()
         let station = layers.station(), weather = cameras ? layers.weather() : []
-        let mode = NewsDisplayMode.selected
+        var selected = snapshot ?? NewsSnapshot(date: now, events: [], availableSources: 0, note: nil)
+        selected.displayMode = NewsDisplayMode.selected
+        let mode = effectiveDisplayMode(selected, now: now)
         let pool = displayPool(all, mode: mode, now: now, filter: filter)
         let cities = CameraCity.selected, settings = MapSettings()
         let frames = Dictionary(uniqueKeysWithValues: cities.map { ($0.id, CameraSnapshotStore.shared.read($0.id)?.frames.filter(CameraOptions.allows) ?? []) })
@@ -278,12 +282,12 @@ struct WorldComponentProvider: TimelineProvider {
         let spacing = Self.entrySpacing, slot = floor(now.timeIntervalSince1970 / spacing) * spacing
         return (0..<min(10, max(1, Int(Double(minutes * 60) / spacing)))).map { index in
             let date = index == 0 ? now : Date(timeIntervalSince1970: slot + Double(index) * spacing)
-            let news = mode == .latest ? Array(pool.prefix(12)) : rotationEvents(pool, at: date, limit: 10).events
+            let news = mode == .rotation ? rotationEvents(pool, at: date, limit: 10).events : Array(pool.prefix(12))
             let signals = snapshot?.conflictSignals ?? conflictSignals(retained, now: now)
             let conflicts = mapConflicts(signals: signals, ongoing: ongoing, now: date)
             return WorldComponentEntry(date: date, events: news, note: (filter.mode == .personal || filter.eventsOnly) && news.isEmpty ? (filter.mode == .personal ? "没有符合个性设置的新闻" : "没有符合过滤条件的新闻") : nil, markers: mapMarkers(all, now: date), conflicts: conflicts,
                                        cyclones: layers.cyclones(at: date), weather: weather, station: station, sun: solarPosition(at: date),
-                                       settings: settings, cities: cities, frames: frames, index: Int(date.timeIntervalSince1970 / spacing))
+                                       settings: settings, cities: cities, frames: frames, index: Int(date.timeIntervalSince1970 / spacing), hot: mode == .hot)
         }
     }
 }
@@ -316,7 +320,7 @@ struct WorldComponentView: View {
                             Text(note).font(.caption).foregroundStyle(.secondary).frame(maxWidth: .infinity, maxHeight: .infinity)
                         } else {
                             FillingStack(spacing: 9) {
-                                ForEach(entry.events) { event in WidgetRow(event: event, family: .systemLarge) }
+                                ForEach(entry.events) { event in WidgetRow(event: event, family: .systemLarge, hot: entry.hot) }
                             }
                             .clipped()
                         }
@@ -364,7 +368,7 @@ struct WorldLiveWidget: Widget {
 
 @main struct WorldWatchWidgets: WidgetBundle {
     init() {
-        NSLog("世界动态组件目录 2.8/31：WorldWatchNews、WorldWatchDashboard、WorldWatchMap、WorldWatchLive")
+        NSLog("世界动态组件目录 2.9/32：WorldWatchNews、WorldWatchDashboard、WorldWatchMap、WorldWatchLive")
     }
     var body: some Widget {
         WorldWatchWidget()

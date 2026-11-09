@@ -1,8 +1,11 @@
 import Cocoa
 import Combine
+import OSLog
 import SwiftUI
 import Translation
 import WidgetKit
+
+let storyLog = Logger(subsystem: "local.michael.worldwatch", category: "stories")
 
 struct CachedFeed: Codable {
     var events: [WorldEvent]
@@ -32,8 +35,35 @@ struct CachedFeed: Codable {
     @Published var translating = false
     @Published var disabled: Set<String> = Set(UserDefaults.standard.stringArray(forKey: "disabledSources") ?? [])
     @Published var interval: Double = UserDefaults.standard.double(forKey: "refreshInterval") == 0 ? 60 : UserDefaults.standard.double(forKey: "refreshInterval")
+    @Published var stories: StoryResult?
+    @Published var lastViewed = UserDefaults.standard.object(forKey: "lastViewedNews") as? Date
     var enabledSources: [NewsSource] { NewsSource.all.filter { !disabled.contains($0.id) } }
-    var events: [WorldEvent] { mergedEvents(enabledSources.flatMap { feeds[$0.id]?.events ?? [] }) }
+    /// Retained headlines with story facts copied in (collapse keys, outlet counts, breaking).
+    var rawEvents: [WorldEvent] { decoratedEvents(enabledSources.flatMap { feeds[$0.id]?.events ?? [] }, with: stories) }
+    /// Lead headlines of hot stories that already fell out of the 100-item cache.
+    var leadEvents: [WorldEvent] {
+        let retained = Set(feeds.values.flatMap { $0.events.map(\.id) })
+        return storyLeadEvents(stories, enabledIDs: Set(enabledSources.map(\.id))).filter { !retained.contains($0.id) }
+    }
+    var events: [WorldEvent] { mergedEvents(rawEvents) }
+    func storyMembers(_ event: WorldEvent) -> [WorldEvent] {
+        guard let stories, let story = stories.story(for: event.id) else { return [] }
+        return story.memberIDs.compactMap { stories.events[$0] }.sorted { ($0.date ?? .distantPast) > ($1.date ?? .distantPast) }
+    }
+    func isNew(_ event: WorldEvent) -> Bool {
+        guard let lastViewed else { return false }
+        let seen = stories?.story(for: event.id)?.firstObserved ?? storyIndex[event.id]?.observedAt
+        return (seen ?? .distantPast) > lastViewed
+    }
+    func markViewed() {
+        lastViewed = Date()
+        UserDefaults.standard.set(lastViewed, forKey: "lastViewedNews")
+    }
+    private var storyIndex: [String: StoryEntry] = [:]
+    private let storyCache = StoryFeatureCache()
+    private var storyTask: Task<Void, Never>?
+    private var backTranslating = false
+    private let storyIndexURL = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("WorldWatch/story-index.json")
     var healthyCount: Int { enabledSources.filter { errors[$0.id] == nil && feeds[$0.id] != nil }.count }
     private var loop: Task<Void, Never>?
     private var cameraLoop: Task<Void, Never>?
@@ -46,7 +76,10 @@ struct CachedFeed: Codable {
     private var observedConflicts: [ConflictSignal] = []
     private let cacheURL = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("WorldWatch/feeds.json")
     init() {
-        filter = widgetDisplayMode == .latest ? "最新" : "综合"
+        filter = Self.scope(for: widgetDisplayMode)
+        if let data = try? Data(contentsOf: storyIndexURL), let index = try? JSONDecoder().decode([String: StoryEntry].self, from: data) {
+            storyIndex = updatedStoryIndex(index, with: [])
+        }
         if newsFilter.eventOnly == nil {
             newsFilter.eventOnly = true
             NewsFilter.selected = newsFilter
@@ -61,6 +94,53 @@ struct CachedFeed: Codable {
             persistFeeds()
         }
         readCameras()
+        scheduleStories(delay: 0)
+    }
+    static func scope(for mode: NewsDisplayMode) -> String { mode == .latest ? "最新" : mode == .rotation ? "综合" : "热点" }
+    /// Re-clusters the 72-hour index off the main thread; the latest call wins.
+    func scheduleStories(delay: Double = 1) {
+        storyTask?.cancel()
+        storyTask = Task {
+            if delay > 0 { do { try await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000)) } catch { return } }
+            let entries = Array(storyIndex.values.filter { !disabled.contains($0.event.sourceID) })
+            let cache = storyCache
+            let started = Date()
+            let result = await Task.detached(priority: .utility) { buildStories(entries, now: Date(), cache: cache) }.value
+            guard !Task.isCancelled else { return }
+            let multi = result.stories.filter { $0.outlets.count >= 2 }
+            storyLog.notice("热点重算：\(entries.count, privacy: .public) 条 → \(result.stories.count, privacy: .public) 个事件，≥2 家 \(multi.count, privacy: .public)，≥3 家 \(multi.filter { $0.outlets.count >= 3 }.count, privacy: .public)，耗时 \(Date().timeIntervalSince(started), format: .fixed(precision: 2), privacy: .public) 秒")
+            stories = result
+            cache.retain(Set(storyIndex.keys))
+            persistStoryIndex()
+            publishWidgetSnapshot()
+        }
+    }
+    private func persistStoryIndex() {
+        do {
+            try FileManager.default.createDirectory(at: storyIndexURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try JSONEncoder().encode(storyIndex).write(to: storyIndexURL, options: .atomic)
+        } catch { storyLog.error("事件索引保存失败：\(error.localizedDescription, privacy: .public)") }
+    }
+    /// Apple on-device zh→en back-translation of Chinese-language headlines; skipped when the pack is missing.
+    func backTranslate() async {
+        guard !backTranslating else { return }
+        backTranslating = true
+        defer { backTranslating = false }
+        let zh = Locale.Language(identifier: "zh-Hans"), en = Locale.Language(identifier: "en")
+        guard await LanguageAvailability().status(from: zh, to: en) == .installed else { return }
+        let pending = storyIndex.values.filter { isChineseSource($0.event.sourceID) && $0.english == nil }
+            .sorted { ($0.event.date ?? $0.observedAt) > ($1.event.date ?? $1.observedAt) }.prefix(20)
+        guard !pending.isEmpty else { return }
+        let session = TranslationSession(installedSource: zh, target: en)
+        let requests = pending.map { entry in
+            TranslationSession.Request(sourceText: entry.event.title.applyingTransform(StringTransform("Traditional-Simplified"), reverse: false) ?? entry.event.title, clientIdentifier: entry.event.id)
+        }
+        guard let responses = try? await session.translations(from: Array(requests)) else { return }
+        for response in responses {
+            if let id = response.clientIdentifier, storyIndex[id] != nil { storyIndex[id]?.english = response.targetText }
+        }
+        scheduleStories()
+        if pending.count == 20 { Task { await backTranslate() } }
     }
     private func limitedCachedFeeds(_ cached: [String: CachedFeed]) -> [String: CachedFeed] {
         let snapshots = cached.filter { !disabled.contains($0.key) }.mapValues { SourceSnapshot(events: $0.events, fetchedAt: $0.fetched) }
@@ -104,7 +184,7 @@ struct CachedFeed: Codable {
         translating = true
         defer { translating = false }
         let balanced = displayPool(events, mode: widgetDisplayMode)
-        let current = widgetDisplayMode == .latest ? Array(balanced.prefix(9)) : rotationEvents(balanced, at: Date(), limit: 6).events
+        let current = widgetDisplayMode == .rotation ? rotationEvents(balanced, at: Date(), limit: 6).events : Array(balanced.prefix(9))
         let currentIDs = Set(current.map(\.id))
         let original = current + balanced.filter { !currentIDs.contains($0.id) } + events.filter { item in !balanced.contains { $0.id == item.id } }
         let cached = await TitleTranslator.shared.applyCache(to: original)
@@ -131,6 +211,11 @@ struct CachedFeed: Codable {
 
     private func applyTranslated(_ events: [WorldEvent]) {
         let translated = Dictionary(events.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+        var retitled = false
+        for (id, event) in translated where storyIndex[id] != nil && storyIndex[id]?.event.translatedTitle != event.translatedTitle {
+            storyIndex[id]?.event.translatedTitle = event.translatedTitle; retitled = true
+        }
+        if retitled { scheduleStories() }
         for source in Array(feeds.keys) {
             guard var feed = feeds[source] else { continue }
             feed.events = feed.events.map { translated[$0.id] ?? $0 }
@@ -157,7 +242,7 @@ struct CachedFeed: Codable {
     func setWidgetDisplayMode(_ mode: NewsDisplayMode) {
         widgetDisplayMode = mode
         NewsDisplayMode.selected = mode
-        filter = mode == .latest ? "最新" : "综合"
+        filter = Self.scope(for: mode)
         publishWidgetSnapshot(forceReload: true)
         Task { await translateTitles() }
     }
@@ -275,6 +360,7 @@ struct CachedFeed: Codable {
             for await (id, items, error) in group {
                 if let items {
                     let cached = await TitleTranslator.shared.applyCache(to: items)
+                    storyIndex = updatedStoryIndex(storyIndex, with: cached)
                     let previous = events
                     let previousConflicts = observedConflicts
                     observedConflicts = mergedConflictSignals(observedConflicts, conflictSignals(cached), enabledIDs: enabledSources.map(\.id))
@@ -294,7 +380,8 @@ struct CachedFeed: Codable {
         persistFeeds()
         incrementalSnapshotTask?.cancel(); incrementalSnapshotTask = nil
         publishWidgetSnapshot(forceReload: reloadWidget)
-        Task { await translateTitles() }
+        scheduleStories()
+        Task { await translateTitles(); await backTranslate() }
     }
     private func persistFeeds() {
         do {
@@ -306,8 +393,9 @@ struct CachedFeed: Codable {
         let publishedAt = Date()
         let store = NewsSnapshotStore.shared
         let previous = store.read()
+        let leads = leadEvents
         let results = enabledSources.map { source in
-            SourceFetchResult(id: source.id, events: errors[source.id] == nil ? feeds[source.id]?.events : nil, fetchedAt: feeds[source.id]?.fetched)
+            SourceFetchResult(id: source.id, events: errors[source.id] == nil ? feeds[source.id].map { decoratedEvents($0.events, with: stories) + leads.filter { $0.sourceID == source.id } } : nil, fetchedAt: feeds[source.id]?.fetched)
         }
         let checked = max(lastCheck ?? .distantPast, previous?.checkDate ?? .distantPast)
         var snapshot = refreshedSnapshot(previous: previous, results: results, now: checked == .distantPast ? publishedAt : checked, enabledIDs: enabledSources.map(\.id), mode: widgetDisplayMode, observedAt: publishedAt)
@@ -338,37 +426,79 @@ struct CachedFeed: Codable {
 
 struct EventRow: View {
     let event: WorldEvent
+    var members: [WorldEvent] = []
+    var isNew = false
     @State private var hovering = false
+    @State private var showMembers = false
     var body: some View {
-        Button {
-            NSWorkspace.shared.open(event.url)
-        } label: {
-            VStack(alignment: .leading, spacing: 4) {
-                HStack(spacing: 6) {
-                    Text(event.sourceName).fontWeight(.semibold).foregroundStyle(.secondary)
-                    if let date = event.date {
-                        Text((event.timeKind == "发生" ? "发生 " : "") + (eventTimeLabel(event) ?? shortTimeLabel(date))).monospacedDigit().foregroundStyle(.tertiary)
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 6) {
+                if isNew { Circle().fill(Color.accentColor).frame(width: 6, height: 6).accessibilityLabel("新") }
+                Text(event.sourceName).fontWeight(.semibold).foregroundStyle(.secondary)
+                if let outlets = event.storyOutlets, outlets.count >= 2 {
+                    Button { showMembers = true } label: {
+                        Text("· \(outlets.count) 家").fontWeight(.medium).foregroundStyle(outlets.count >= 3 ? Color.orange : Color.secondary)
                     }
-                    if let severity = event.severity {
-                        Text(severity).fontWeight(.medium).foregroundStyle(severity == "红色预警" ? Color.red : Color.orange)
-                    }
-                    Spacer(minLength: 8)
+                    .buttonStyle(.plain)
+                    .help("查看报道这件事的 \(outlets.count) 家媒体")
+                    .popover(isPresented: $showMembers, arrowEdge: .bottom) { StoryMembersView(event: event, members: members) }
                 }
-                .font(.system(size: 11)).lineLimit(1)
-                Text(event.displayTitle)
-                    .font(.system(size: 14, weight: .medium))
-                    .lineSpacing(2)
-                    .foregroundStyle(.primary)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                if let date = event.date {
+                    Text((event.timeKind == "发生" ? "发生 " : "") + (eventTimeLabel(event) ?? shortTimeLabel(date))).monospacedDigit().foregroundStyle(.tertiary)
+                }
+                if let severity = event.severity {
+                    Text(severity).fontWeight(.medium).foregroundStyle(severity == "红色预警" ? Color.red : Color.orange)
+                }
+                Spacer(minLength: 8)
             }
-            .padding(.horizontal, 10).padding(.vertical, 9)
-            .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(Color.primary.opacity(hovering ? 0.06 : 0)))
-            .contentShape(Rectangle())
+            .font(.system(size: 11)).lineLimit(1)
+            (isBreaking(event) ? Text("\(Text("突发 ").foregroundStyle(Color.red))\(event.displayTitle)") : Text(event.displayTitle))
+                .font(.system(size: 14, weight: .medium))
+                .lineSpacing(2)
+                .foregroundStyle(.primary)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .buttonStyle(.plain)
+        .padding(.horizontal, 10).padding(.vertical, 9)
+        .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(Color.primary.opacity(hovering ? 0.06 : 0)))
+        .contentShape(Rectangle())
+        .onTapGesture { NSWorkspace.shared.open(event.url) }
+        .accessibilityAddTraits(.isButton)
         .onHover { hovering = $0 }
         .help(event.translatedTitle == nil ? "打开原始报道 · \(event.url.host ?? "")" : "原文：\(event.title)\n打开原始报道 · \(event.url.host ?? "")")
+    }
+}
+
+/// Minimal event page: every report of the story, newest first.
+struct StoryMembersView: View {
+    let event: WorldEvent
+    let members: [WorldEvent]
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("\(event.storyOutlets?.count ?? members.count) 家媒体报道" + (event.storyFirstDate.map { " · 首报 \(shortTimeLabel($0))" } ?? ""))
+                .font(.system(size: 12, weight: .semibold)).foregroundStyle(.secondary)
+            ScrollView {
+                VStack(alignment: .leading, spacing: 2) {
+                    ForEach(members) { member in
+                        Button { NSWorkspace.shared.open(member.url) } label: {
+                            VStack(alignment: .leading, spacing: 2) {
+                                HStack(spacing: 6) {
+                                    Text(member.sourceName).fontWeight(.semibold)
+                                    if let date = member.date { Text(eventTimeLabel(member) ?? shortTimeLabel(date)).monospacedDigit() }
+                                }
+                                .font(.system(size: 11)).foregroundStyle(.secondary)
+                                Text(member.displayTitle).font(.system(size: 13)).foregroundStyle(.primary).fixedSize(horizontal: false, vertical: true)
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 4).contentShape(Rectangle())
+                        }
+                        .buttonStyle(.plain)
+                        .help(member.translatedTitle == nil ? member.url.host ?? "" : "原文：\(member.title)")
+                    }
+                }
+            }
+            .frame(maxHeight: 360)
+        }
+        .padding(14).frame(width: 380)
     }
 }
 
@@ -376,11 +506,12 @@ struct WorldView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @ObservedObject var store: EventStore
     @State private var showCameras = false
-    static let scopes = ["综合", "最新", "国内", "国际", "政治", "财经", "科技", "文娱", "体育", "灾害"]
+    static let scopes = ["热点", "综合", "最新", "国内", "国际", "政治", "财经", "科技", "文娱", "体育", "灾害"]
     var rows: [WorldEvent] {
-        let raw = store.enabledSources.flatMap { store.feeds[$0.id]?.events ?? [] }
+        let raw = store.rawEvents
+        if store.filter == "热点" { return hotEvents(raw + store.leadEvents, now: store.rotationDate, filter: store.newsFilter) }
         let personal = store.newsFilter.mode == .personal
-        let events = personal || store.newsFilter.eventsOnly ? uniqueNewsEvents(applyNewsFilter(raw, filter: store.newsFilter), mergeTopics: false, now: store.rotationDate) : store.events
+        let events = collapsedStories(personal || store.newsFilter.eventsOnly ? uniqueNewsEvents(applyNewsFilter(raw, filter: store.newsFilter), mergeTopics: false, now: store.rotationDate) : mergedEvents(raw))
         if store.filter == "综合" {
             let pool = digestPool(raw, now: store.rotationDate, filter: store.newsFilter)
             let page = rotationEvents(pool, at: store.rotationDate).events
@@ -506,10 +637,15 @@ struct WorldView: View {
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
+            if store.filter == "热点", let surging = store.stories?.surging, !surging.isEmpty {
+                Text("飙升：" + surging.joined(separator: " · "))
+                    .font(.system(size: 12)).foregroundStyle(.secondary).lineLimit(1)
+                    .frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 20).padding(.top, 8)
+            }
             ScrollView {
                 LazyVStack(spacing: 2) {
                     ForEach(rows.prefix(retainedNewsLimit)) { event in
-                        EventRow(event: event)
+                        EventRow(event: event, members: event.storyOutlets == nil ? [] : store.storyMembers(event), isNew: store.isNew(event))
                             .transition(reduceMotion ? .opacity : .asymmetric(insertion: .move(edge: .top).combined(with: .opacity), removal: .opacity))
                     }
                 }
@@ -681,7 +817,7 @@ struct SettingsView: View {
                         ForEach(DomesticShare.allCases, id: \.self) { Text($0.rawValue).tag($0) }
                     }
                 } header: { Text("小组件") } footer: {
-                    Text((store.widgetDisplayMode == .latest ? "按报道时间排列，新报道出现在最上方。" : "混合不同领域的近期报道并定时轮换，轮换不代表新发布。")
+                    Text((store.widgetDisplayMode == .latest ? "按报道时间排列，新报道出现在最上方。" : store.widgetDisplayMode == .rotation ? "混合不同领域的近期报道并定时轮换，轮换不代表新发布。" : "热点按报道同一事件的媒体数排序，由 App 计算；App 未运行时组件按最新优先显示。")
                          + "北京时间白天国内发稿集中，「均衡」时国内新闻约占三分之一、「少」约占五分之一，超出的顺延到后面，不会丢弃；同时作用于应用里的「最新」列表。")
                         .foregroundStyle(.secondary)
                 }
@@ -850,6 +986,10 @@ struct SettingsView: View {
         for entry in menu.items { entry.target = self }
         item.menu = menu
         panel.orderFrontRegardless()
+        // "Since you last looked": a look ends when the window stops being the one you are using.
+        NotificationCenter.default.addObserver(forName: NSWindow.didResignKeyNotification, object: panel, queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.store.markViewed() }
+        }
         store.start()
         store.startCameras()
         store.startMapLayers()
