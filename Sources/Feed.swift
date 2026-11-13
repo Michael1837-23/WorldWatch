@@ -77,12 +77,18 @@ struct WorldEvent: Identifiable, Codable, Sendable {
     var storyLead: Bool? = nil
     var storyFirstDate: Date? = nil
     var breakingUntil: Date? = nil
+    // Followed-view facts (Sources/Topics.swift), set by the app on the rows it publishes.
+    var followTopics: [String]? = nil
+    var major: Bool? = nil
+    var primaryOutlets: Int? = nil
+    var factNote: String? = nil
+    var historyOutlets: Int? = nil
     var displayTitle: String { translatedTitle ?? title }
-    var sourceName: String { publisher ?? NewsSource.all.first { $0.id == sourceID }?.name ?? sourceID }
-    var isDomestic: Bool { NewsSource.all.first { $0.id == sourceID }?.domestic ?? false }
+    var sourceName: String { publisher ?? NewsSource.find(sourceID)?.name ?? sourceID }
+    var isDomestic: Bool { NewsSource.find(sourceID)?.domestic ?? false }
     var category: NewsCategory {
         if disaster { return .disaster }
-        let fallback = NewsSource.all.first { $0.id == sourceID }?.category ?? .world
+        let fallback = NewsSource.find(sourceID)?.category ?? .world
         guard fallback == .world || fallback == .domestic else { return fallback }
         let text = title.lowercased()
         if text.range(of: #"\b(elections?|president|prime minister|parliament|ceasefire|sanctions|military|war|treaty|summit)\b|选举|選舉|大选|大選|总统|總統|国务院|國務院|外交|军事|軍事|停火|制裁|峰会|峰會"#, options: .regularExpression) != nil { return .politics }
@@ -161,6 +167,8 @@ private let nonEventHeadlinePatterns = [
     // Question-led headlines, podcasts and prescriptions are commentary, not reports.
     #"^\s*(?:can|will|is|are|do|does|should|could|would|has|have)\b[^?]*\?|^\s*(?:listen|watch|live)\s*[:：]|\b(?:must|should)\s+(?:be|not)\b"#,
     #"(?:新路径|新模式|新篇章|新气象|新答卷|的底气|的坚守|见证中国)"#,
+    // Newspaper editorials ("The Guardian view on …").
+    #"^\s*the [\w ]{1,30} view on\b"#,
     // Anticipation rather than something that already happened.
     #"\b(?:set to|braces? for|fears?|plans? (?:for|to)|to (?:spread|sweep))\b|担心|将(?:蔓延|席卷)|做准备|计划"#
 ].compactMap { try? NSRegularExpression(pattern: $0, options: .caseInsensitive) }
@@ -169,7 +177,7 @@ private let reportedAction = try! NSRegularExpression(pattern: #"\b(?:killed|inj
 
 // "Something happened": an action or outcome verb. Speech verbs (says, 表示, 称) are deliberately absent,
 // so quote-only headlines need another action to count as events.
-private let eventActionPattern = try! NSRegularExpression(pattern: #"\b(?:kill(?:s|ed)?|dies|died|dead|injur(?:es|ed)|wound(?:s|ed)|attack(?:s|ed)|bomb(?:s|ed|ing)|strikes?|struck|shoot(?:s|ing)|shot|arrest(?:s|ed)|detain(?:s|ed)|charg(?:es|ed)|convict(?:s|ed)|sentenc(?:es|ed)|jail(?:s|ed)|sues?|sued|crash(?:es|ed)|collid(?:es|ed)|explo(?:des|ded|sion)|erupts?|hits?|floods?|burn(?:s|ed)|collaps(?:es|ed)|evacuat(?:es|ed)|win(?:s)?|won|beat(?:s)?|stuns?|stunned|defeat(?:s|ed)?|upset|clinch(?:es|ed)|elect(?:s|ed)|vot(?:es|ed)|pass(?:es|ed)|approv(?:es|ed)|reject(?:s|ed)|ban(?:s|ned)|sign(?:s|ed)|launch(?:es|ed)|unveil(?:s|ed)|announc(?:es|ed)|releas(?:es|ed)|issu(?:es|ed)|open(?:s|ed)|clos(?:es|ed)|resign(?:s|ed)|fir(?:es|ed)|appoint(?:s|ed)|nam(?:es|ed)|meet(?:s)?|met|visit(?:s|ed)|agree(?:s|d)?|deal|seiz(?:es|ed)|raid(?:s|ed)|invad(?:es|ed)|captur(?:es|ed)|withdraw(?:s|n)?|cut(?:s)?|rais(?:es|ed)|hik(?:es|ed)|surg(?:es|ed)|plung(?:es|ed)|soar(?:s|ed)|tumbl(?:es|ed)|ris(?:es|en)|rose|fall(?:s|en)?|fell|drop(?:s|ped)|jump(?:s|ed)|slump(?:s|ed)|record(?:s|ed)?|acquir(?:es|ed)|buy(?:s)?|bought|sell(?:s)?|sold|merg(?:es|ed)|lay(?:s)? off|halt(?:s|ed)|suspend(?:s|ed)|block(?:s|ed)|recall(?:s|ed)|land(?:s|ed)|held|holds?|kick(?:s|ed) off|ends?|ended|begins?|began|starts?|started|confirm(?:s|ed)|report(?:s|ed)|warn(?:s|ed)|order(?:s|ed)|deploy(?:s|ed)|fin(?:es|ed)|grant(?:s|ed)|award(?:s|ed)|scor(?:es|ed)|qualif(?:ies|ied)|retir(?:es|ed)|fail(?:s|ed)?|gather(?:s|ed)|rall(?:y|ies|ied)|protest(?:s|ed)|defect(?:s|ed)|host(?:s|ed)|derail(?:s|ed)|downgrad(?:es|ed)|upgrad(?:es|ed)|fle(?:e|es|d)|forced|displac(?:es|ed)|blockad(?:es|ed)|chok(?:es|ed) off)\b|发生|主办|公映|上映|放映|逃离|首演|首映|首发|开工|竣工|揭牌|挂牌|齐聚|出轨|脱轨|撞上|调降|下调|上调|通报|接受审查|被查|落马|新高|新低|举行|举办|召开|开幕|闭幕|发布|发行|宣布|公布|出台|实施|签署|通过|批准|否决|当选|任命|辞职|会见|会谈|访问|抵达|启动|开通|成立|落地|投产|遇难|死亡|身亡|受伤|袭击|爆炸|坠毁|相撞|起火|失火|地震|洪水|击败|战胜|夺冠|获胜|晋级|逮捕|拘留|起诉|判处|罚款|上涨|下跌|大涨|大跌|暴跌|飙升|收购|裁员|停产|停飞|撤离|撤军|部署|增兵|空袭|发射|试射|宣判|破获|查处|立案|降息|加息|突破|创下|刷新纪录"#, options: .caseInsensitive)
+private let eventActionPattern = try! NSRegularExpression(pattern: #"\b(?:kill(?:s|ed)?|dies|died|dead|injur(?:es|ed)|wound(?:s|ed)|attack(?:s|ed)|bomb(?:s|ed|ing)|strikes?|struck|shoot(?:s|ing)|shot|arrest(?:s|ed)|detain(?:s|ed)|charg(?:es|ed)|convict(?:s|ed)|sentenc(?:es|ed)|jail(?:s|ed)|sues?|sued|crash(?:es|ed)|collid(?:es|ed)|explo(?:des|ded|sion)|erupts?|hits?|floods?|burn(?:s|ed)|collaps(?:es|ed)|evacuat(?:es|ed)|win(?:s)?|won|beat(?:s)?|stuns?|stunned|defeat(?:s|ed)?|upset|clinch(?:es|ed)|elect(?:s|ed)|vot(?:es|ed)|pass(?:es|ed)|approv(?:es|ed)|reject(?:s|ed)|ban(?:s|ned)|sign(?:s|ed)|launch(?:es|ed)|unveil(?:s|ed)|announc(?:es|ed)|releas(?:es|ed)|issu(?:es|ed)|open(?:s|ed)|clos(?:es|ed)|resign(?:s|ed)|fir(?:es|ed)|appoint(?:s|ed)|nam(?:es|ed)|meet(?:s)?|met|visit(?:s|ed)|agree(?:s|d)?|deal|seiz(?:es|ed)|raid(?:s|ed)|invad(?:es|ed)|captur(?:es|ed)|withdraw(?:s|n)?|cut(?:s)?|rais(?:es|ed)|hik(?:es|ed)|surg(?:es|ed)|plung(?:es|ed)|soar(?:s|ed)|tumbl(?:es|ed)|ris(?:es|en)|rose|fall(?:s|en)?|fell|drop(?:s|ped)|jump(?:s|ed)|slump(?:s|ed)|record(?:s|ed)?|acquir(?:es|ed)|buy(?:s)?|bought|sell(?:s)?|sold|merg(?:es|ed)|lay(?:s)? off|halt(?:s|ed)|suspend(?:s|ed)|block(?:s|ed)|recall(?:s|ed)|land(?:s|ed)|held|holds?|kick(?:s|ed) off|ends?|ended|begins?|began|starts?|started|confirm(?:s|ed)|report(?:s|ed)|warn(?:s|ed)|order(?:s|ed)|deploy(?:s|ed)|fin(?:es|ed)|grant(?:s|ed)|award(?:s|ed)|scor(?:es|ed)|qualif(?:ies|ied)|retir(?:es|ed)|fail(?:s|ed)?|gather(?:s|ed)|rall(?:y|ies|ied)|protest(?:s|ed)|defect(?:s|ed)|host(?:s|ed)|derail(?:s|ed)|downgrad(?:es|ed)|upgrad(?:es|ed)|fle(?:e|es|d)|forced|displac(?:es|ed)|blockad(?:es|ed)|chok(?:es|ed) off|guts|ax(?:es|ed)|scrap(?:s|ped)?|delay(?:s|ed)|postpon(?:es|ed)|quits?|exits?|steps? down|stepped down|oust(?:s|ed)|prob(?:es|ed)|investigat(?:es|ed|ing)|summon(?:s|ed)|subpoena(?:s|ed)|testif(?:ies|ied)|dock(?:s|ed)|recover(?:s|ed)|caught|expand(?:s|ed)|shut(?:s)? down|restrict(?:s|ed)|impos(?:es|ed)|lift(?:s|ed)|extend(?:s|ed)|pledg(?:es|ed)|threaten(?:s|ed)|accus(?:es|ed)|deni(?:es|ed)|offer(?:s|ed)|propos(?:es|ed)|invest(?:s|ed)|outage|disrupt(?:s|ed))\b|发生|主办|公映|上映|放映|逃离|首演|首映|首发|开工|竣工|揭牌|挂牌|齐聚|出轨|脱轨|撞上|调降|下调|上调|通报|接受审查|被查|落马|新高|新低|举行|举办|召开|开幕|闭幕|发布|发行|宣布|公布|出台|实施|签署|通过|批准|否决|当选|任命|辞职|会见|会谈|访问|抵达|启动|开通|成立|落地|投产|遇难|死亡|身亡|受伤|袭击|爆炸|坠毁|相撞|起火|失火|地震|洪水|击败|战胜|夺冠|获胜|晋级|逮捕|拘留|起诉|判处|罚款|上涨|下跌|大涨|大跌|暴跌|飙升|收购|裁员|停产|停飞|撤离|撤军|部署|增兵|空袭|发射|试射|宣判|破获|查处|立案|降息|加息|突破|创下|刷新纪录|请辞|卸任|离任|解雇|撤换|调查|传唤|作证|加征|致电|通话|会晤|磋商|谈判|达成|交火|击落|拦截|试飞|回收|入轨|对接|上线|推出|暂停|恢复|延长|取消|证实|披露|曝光|遇袭|遭袭|中断|停电|宕机|故障"#, options: .caseInsensitive)
 
 /// Events-only keeps headlines that report something that happened: an action verb and no feature, opinion
 /// or interview marker. Disasters always count. This is a title heuristic, not a semantic classifier.
@@ -228,6 +236,13 @@ private struct NewsFilterMatcher {
     }
 }
 
+/// Blocked keywords alone (personal mode), for lists that do their own selection such as the followed view.
+func newsFilterBlocks(_ event: WorldEvent, filter: NewsFilter) -> Bool {
+    let blocked = KeywordMatcher(filter.blocked)
+    guard filter.mode == .personal, !blocked.isEmpty else { return false }
+    return [event.title, event.translatedTitle].compactMap { $0 }.map(normalizedKeyword).contains(where: blocked.matches)
+}
+
 func newsFilterAllows(_ event: WorldEvent, filter: NewsFilter) -> Bool {
     NewsFilterMatcher(filter).allows(event)
 }
@@ -244,14 +259,14 @@ struct SourceSnapshot: Codable, Sendable {
 }
 
 enum NewsDisplayMode: String, Codable, CaseIterable, Sendable {
-    case latest, rotation, hot
-    var title: String { self == .latest ? "最新优先" : self == .rotation ? "综合轮播" : "热点优先" }
+    case followed, latest, rotation, hot
+    var title: String { self == .followed ? "关注优先" : self == .latest ? "最新优先" : self == .rotation ? "综合轮播" : "热点优先" }
     private static var preferences: UserDefaults {
         let group = Bundle.main.object(forInfoDictionaryKey: "WorldWatchAppGroup") as? String
         return group.flatMap { UserDefaults(suiteName: $0) } ?? .standard
     }
     static var selected: NewsDisplayMode {
-        get { NewsDisplayMode(rawValue: preferences.string(forKey: "widgetDisplayMode") ?? "") ?? .latest }
+        get { NewsDisplayMode(rawValue: preferences.string(forKey: "widgetDisplayMode") ?? "") ?? .followed }
         set { preferences.set(newValue.rawValue, forKey: "widgetDisplayMode") }
     }
 }
@@ -272,6 +287,8 @@ struct NewsSnapshot: Codable, Sendable {
     var displayMode: NewsDisplayMode? = nil
     var updatedAt: Date? = nil
     var conflictSignals: [ConflictSignal]? = nil
+    /// The app's followed view (关注对象 + 大事), at most 40 rows; widgets fall back to keyword matching when stale.
+    var followedEvents: [WorldEvent]? = nil
     var mode: NewsDisplayMode { displayMode ?? .latest }
     var checkDate: Date { checkedAt ?? date }
     var revisionDate: Date { max(checkDate, updatedAt ?? checkDate) }
@@ -406,6 +423,7 @@ func displayPool(_ events: [WorldEvent], mode: NewsDisplayMode, now: Date = Date
     case .latest: return latestEvents(events, now: now, filter: filter)
     case .rotation: return digestPool(events, now: now, filter: filter)
     case .hot: return hotEvents(events, now: now, filter: filter)
+    case .followed: return followedFallback(events, topics: FollowTopic.selected, now: now).filter { !newsFilterBlocks($0, filter: filter) }
     }
 }
 
@@ -465,9 +483,15 @@ func widgetTimeline(_ snapshot: NewsSnapshot, now: Date = Date(), pageSize: Int 
     var entry = snapshot
     entry.checkedAt = snapshot.checkDate
     entry.date = now
-    entry.events = mode == .hot ? Array(hotEvents(all, now: now, filter: filter).prefix(pageSize)) : latestEvents(all, limit: pageSize, now: now, filter: filter)
+    switch mode {
+    case .hot: entry.events = Array(hotEvents(all, now: now, filter: filter).prefix(pageSize))
+    case .followed: entry.events = Array(followedPool(snapshot, now: now).filter { !newsFilterBlocks($0, filter: filter) }.prefix(pageSize))
+    default: entry.events = latestEvents(all, limit: pageSize, now: now, filter: filter)
+    }
     entry.displayMode = mode
-    if (filter.mode == .personal || filter.eventsOnly) && entry.events.isEmpty { entry.note = filter.mode == .personal ? "没有符合个性设置的新闻" : "没有符合过滤条件的新闻" }
+    if mode == .followed && entry.events.isEmpty { entry.note = "关注对象暂无新报道" }
+    else if (filter.mode == .personal || filter.eventsOnly) && entry.events.isEmpty { entry.note = filter.mode == .personal ? "没有符合个性设置的新闻" : "没有符合过滤条件的新闻" }
+    entry.followedEvents = nil
     entry.rotationEvents = nil
     entry.conflictSignals = nil
     entry.rotationPage = nil; entry.rotationPageCount = nil
@@ -484,6 +508,7 @@ func sameDigest(_ first: [WorldEvent], _ second: [WorldEvent]) -> Bool {
 func sameRenderedNews(_ first: [WorldEvent], _ second: [WorldEvent]) -> Bool {
     sameDigest(first, second) && first.map(\.displayTitle) == second.map(\.displayTitle)
         && first.map { $0.storyOutlets ?? [] } == second.map { $0.storyOutlets ?? [] } && first.map(\.breakingUntil) == second.map(\.breakingUntil)
+        && first.map { $0.followTopics ?? [] } == second.map { $0.followTopics ?? [] } && first.map(\.major) == second.map(\.major) && first.map(\.factNote) == second.map(\.factNote)
 }
 
 func widgetNewsChanged(from previous: NewsSnapshot?, to snapshot: NewsSnapshot, filter: NewsFilter, now: Date = Date()) -> Bool {
@@ -491,6 +516,7 @@ func widgetNewsChanged(from previous: NewsSnapshot?, to snapshot: NewsSnapshot, 
     func candidates(_ entry: NewsSnapshot) -> [WorldEvent] {
         let all = entry.sourceFeeds?.values.flatMap(\.events) ?? entry.rotationEvents ?? entry.events
         let mode = effectiveDisplayMode(entry, now: now)
+        if mode == .followed { return Array(followedPool(entry, now: now).prefix(12)) }
         let pool = displayPool(all, mode: mode, now: now, filter: filter)
         return mode == .rotation ? pool : Array(pool.prefix(12))
     }
@@ -540,7 +566,8 @@ func refreshedSnapshot(previous: NewsSnapshot?, results: [SourceFetchResult], no
     return NewsSnapshot(date: now, events: selected, availableSources: successful, note: note,
                         sourceFeeds: feeds, changedAt: changed ? now : previous?.changedAt ?? previous?.date,
                         lastSuccess: successful > 0 ? now : previous?.lastSuccess ?? previous?.checkDate, enabledSourceIDs: enabledIDs,
-                        checkedAt: now, rotationEvents: pool, displayMode: mode, conflictSignals: signals)
+                        checkedAt: now, rotationEvents: pool, displayMode: mode, updatedAt: previous?.updatedAt, conflictSignals: signals,
+                        followedEvents: previous?.followedEvents)
 }
 
 struct NewsSnapshotStore {
@@ -700,6 +727,8 @@ final class RSSReader: NSObject, XMLParserDelegate {
         let publisher = source.aggregator ? cleanTitle(fields["source"] ?? "").nilIfEmpty : nil
         // Google News appends " - Publisher" to every title.
         if let publisher, title.hasSuffix(" - " + publisher) { title = String(title.dropLast(publisher.count + 3)).trimmingCharacters(in: .whitespaces) }
+        // Market chatter and self-media relays carry no reporting of their own (Sources/Topics.swift).
+        if let publisher, outletTier(publisher: publisher, sourceID: source.id) == .low { return }
         guard !title.isEmpty, let url = safeURL(fields["link"] ?? "") else { return }
         let alert = fields["gdacs:alertlevel"]?.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         if source.id == "gdacs", alert != "red", alert != "orange" { return }
@@ -732,6 +761,7 @@ private struct EarthquakeFeed: Decodable {
 }
 
 func parseFeed(_ data: Data, source: NewsSource) throws -> [WorldEvent] {
+    if source.id == NewsSource.sina.id { return try parseSinaFeed(data) }
     if source.id != "usgs" { return try RSSReader(source: source).read(data) }
     return try JSONDecoder().decode(EarthquakeFeed.self, from: data).features.compactMap { feature in
         let p = feature.properties
@@ -768,7 +798,7 @@ func fetchSource(_ source: NewsSource, timeout: Double = 25) async throws -> [Wo
     var request = URLRequest(url: source.url)
     request.timeoutInterval = timeout
     request.cachePolicy = .reloadIgnoringLocalCacheData
-    request.setValue("WorldWatch/2.9 (personal desktop news reader)", forHTTPHeaderField: "User-Agent")
+    request.setValue("WorldWatch/2.12 (personal desktop news reader)", forHTTPHeaderField: "User-Agent")
     for attempt in 0..<2 {
         do {
             let (data, response) = try await newsSession.data(for: request)

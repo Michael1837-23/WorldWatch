@@ -7,6 +7,9 @@ import NaturalLanguage
 
 let storyWindow: TimeInterval = 72 * 3600
 let storyIndexLimit = 2000
+/// Followed-topic headlines (topic searches, 新浪 7×24, alias hits) have their own allowance on top of the general cap,
+/// so a busy news day cannot push them out of the 72-hour window.
+let storyIndexFollowLimit = 4000
 let storyThreshold = 0.28
 let storyAnchorBonus = 0.10
 let storyAgePenalty = 0.10
@@ -43,7 +46,7 @@ func outletDisplayName(_ key: String, sample: WorldEvent) -> String {
 }
 
 func isChineseSource(_ sourceID: String) -> Bool {
-    sourceID == "bbc-zh" || sourceID.hasPrefix("cns-") || NewsSource.all.first { $0.id == sourceID }?.language == "zh"
+    sourceID == "bbc-zh" || sourceID.hasPrefix("cns-") || NewsSource.find(sourceID)?.language == "zh"
 }
 
 // MARK: - Features (ported from Tools/cluster-eval/main.swift; keep in sync with the evaluation)
@@ -272,7 +275,7 @@ private func idf<T: Hashable>(_ sets: [Set<T>]) -> [T: Double] {
     return df.mapValues { log(n / Double($0)) }
 }
 
-private func dateOnlySource(_ sourceID: String) -> Bool { NewsSource.all.first { $0.id == sourceID }?.dateOnly ?? false }
+private func dateOnlySource(_ sourceID: String) -> Bool { NewsSource.find(sourceID)?.dateOnly ?? false }
 
 /// Groups the index into stories. Pure and deterministic: same entries and `now` give the same result.
 func buildStories(_ entries: [StoryEntry], now: Date = Date(), cache: StoryFeatureCache? = nil) -> StoryResult {
@@ -424,18 +427,24 @@ private func surgingNames(_ items: [StoryEntry], unitOf: [Int], features: [Story
 // MARK: - Index maintenance
 
 /// Adds or refreshes headlines; keeps first-seen times, drops anything older than 72 hours and caps the size.
-func updatedStoryIndex(_ index: [String: StoryEntry], with events: [WorldEvent], now: Date = Date()) -> [String: StoryEntry] {
+/// `followed` marks headlines that count against the separate followed-topic allowance.
+func updatedStoryIndex(_ index: [String: StoryEntry], with events: [WorldEvent], now: Date = Date(), followed: (WorldEvent) -> Bool = { _ in false }) -> [String: StoryEntry] {
     var result = index
     for event in events where !event.disaster {
-        if var known = result[event.id] { known.event = event; result[event.id] = known }
-        else { result[event.id] = StoryEntry(event: event, observedAt: now) }
+        if var known = result[event.id] {
+            // Keep a translation the index already has when a feed re-delivers the untranslated headline.
+            let translated = known.event.translatedTitle
+            known.event = event
+            if known.event.translatedTitle == nil, known.event.title == event.title { known.event.translatedTitle = translated }
+            result[event.id] = known
+        } else { result[event.id] = StoryEntry(event: event, observedAt: now) }
     }
     result = result.filter { now.timeIntervalSince($0.value.event.date ?? $0.value.observedAt) <= storyWindow }
-    if result.count > storyIndexLimit {
-        let keep = result.values.sorted { ($0.event.date ?? $0.observedAt, $0.event.id) > ($1.event.date ?? $1.observedAt, $1.event.id) }.prefix(storyIndexLimit)
-        result = Dictionary(uniqueKeysWithValues: keep.map { ($0.event.id, $0) })
-    }
-    return result
+    guard result.count > storyIndexLimit else { return result }
+    func newestFirst(_ a: StoryEntry, _ b: StoryEntry) -> Bool { (a.event.date ?? a.observedAt, a.event.id) > (b.event.date ?? b.observedAt, b.event.id) }
+    let split = Dictionary(grouping: result.values) { followed($0.event) }
+    let keep = (split[false] ?? []).sorted(by: newestFirst).prefix(storyIndexLimit) + (split[true] ?? []).sorted(by: newestFirst).prefix(storyIndexFollowLimit)
+    return Dictionary(uniqueKeysWithValues: keep.map { ($0.event.id, $0) })
 }
 
 // MARK: - Decoration and lists

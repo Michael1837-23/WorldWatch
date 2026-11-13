@@ -149,11 +149,15 @@ struct WidgetRow: View {
     let event: WorldEvent
     let family: WidgetFamily
     var hot = false
+    var topics: [FollowTopic] = []
     var body: some View {
         Link(destination: event.url) {
             VStack(alignment: .leading, spacing: 2) {
                 HStack(spacing: 4) {
+                    if event.major == true { Text("大事").fontWeight(.bold).foregroundStyle(Color.orange) }
+                    else if let label = topicLabel(event.followTopics, topics: topics, limit: 1) { Text(label).fontWeight(.bold).foregroundStyle(Color.accentColor) }
                     Text(storySourceLine(event, expanded: hot && family != .systemSmall)).fontWeight(.semibold)
+                    if let note = event.factNote, family != .systemSmall { Text(note) }
                     if let label = eventTimeLabel(event) { Text(label).monospacedDigit() }
                     if let severity = event.severity {
                         Text(severity).foregroundStyle(severity == "红色预警" ? Color.red : Color.orange)
@@ -186,9 +190,10 @@ struct WorldWatchWidgetView: View {
                 .foregroundStyle(.secondary)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
+                let topics = FollowTopic.selected
                 FillingStack(spacing: family == .systemLarge ? 9 : 7) {
                     ForEach(entry.events) { event in
-                        WidgetRow(event: event, family: family, hot: entry.mode == .hot)
+                        WidgetRow(event: event, family: family, hot: entry.mode == .hot, topics: topics)
                             .transition(reduceMotion ? .opacity : .asymmetric(insertion: .move(edge: .top).combined(with: .opacity), removal: .opacity))
                     }
                 }
@@ -207,7 +212,7 @@ struct WorldWatchWidget: Widget {
     var body: some WidgetConfiguration {
         StaticConfiguration(kind: kind, provider: WorldWatchProvider()) { entry in WorldWatchWidgetView(entry: entry) }
             .configurationDisplayName("世界动态")
-            .description("国内外政治、财经、科技、文娱、体育与灾害。可在应用中选择最新优先或综合轮播，更新时间由 macOS 调度。")
+            .description("默认只显示关注对象的报道和重磅大事；也可在应用中改为最新优先、综合轮播或热点优先。更新时间由 macOS 调度。")
             .supportedFamilies([.systemSmall, .systemMedium, .systemLarge])
     }
 }
@@ -275,7 +280,7 @@ struct WorldComponentProvider: TimelineProvider {
         var selected = snapshot ?? NewsSnapshot(date: now, events: [], availableSources: 0, note: nil)
         selected.displayMode = NewsDisplayMode.selected
         let mode = effectiveDisplayMode(selected, now: now)
-        let pool = displayPool(all, mode: mode, now: now, filter: filter)
+        let pool = mode == .followed ? followedPool(selected, now: now).filter { !newsFilterBlocks($0, filter: filter) } : displayPool(all, mode: mode, now: now, filter: filter)
         let cities = CameraCity.selected, settings = MapSettings()
         let frames = Dictionary(uniqueKeysWithValues: cities.map { ($0.id, CameraSnapshotStore.shared.read($0.id)?.frames.filter(CameraOptions.allows) ?? []) })
         cameraLog.notice("实景时间线：\(cities.map { "\($0.id)=\(frames[$0.id]?.count ?? 0)" }.joined(separator: " "), privacy: .public)")
@@ -285,7 +290,8 @@ struct WorldComponentProvider: TimelineProvider {
             let news = mode == .rotation ? rotationEvents(pool, at: date, limit: 10).events : Array(pool.prefix(12))
             let signals = snapshot?.conflictSignals ?? conflictSignals(retained, now: now)
             let conflicts = mapConflicts(signals: signals, ongoing: ongoing, now: date)
-            return WorldComponentEntry(date: date, events: news, note: (filter.mode == .personal || filter.eventsOnly) && news.isEmpty ? (filter.mode == .personal ? "没有符合个性设置的新闻" : "没有符合过滤条件的新闻") : nil, markers: mapMarkers(all, now: date), conflicts: conflicts,
+            let empty = mode == .followed ? "关注对象暂无新报道" : filter.mode == .personal ? "没有符合个性设置的新闻" : "没有符合过滤条件的新闻"
+            return WorldComponentEntry(date: date, events: news, note: (mode == .followed || filter.mode == .personal || filter.eventsOnly) && news.isEmpty ? empty : nil, markers: mapMarkers(all, now: date), conflicts: conflicts,
                                        cyclones: layers.cyclones(at: date), weather: weather, station: station, sun: solarPosition(at: date),
                                        settings: settings, cities: cities, frames: frames, index: Int(date.timeIntervalSince1970 / spacing), hot: mode == .hot)
         }
@@ -319,8 +325,9 @@ struct WorldComponentView: View {
                         if let note = entry.note {
                             Text(note).font(.caption).foregroundStyle(.secondary).frame(maxWidth: .infinity, maxHeight: .infinity)
                         } else {
+                            let topics = FollowTopic.selected
                             FillingStack(spacing: 9) {
-                                ForEach(entry.events) { event in WidgetRow(event: event, family: .systemLarge, hot: entry.hot) }
+                                ForEach(entry.events) { event in WidgetRow(event: event, family: .systemLarge, hot: entry.hot, topics: topics) }
                             }
                             .clipped()
                         }
@@ -368,7 +375,7 @@ struct WorldLiveWidget: Widget {
 
 @main struct WorldWatchWidgets: WidgetBundle {
     init() {
-        NSLog("世界动态组件目录 2.9/32：WorldWatchNews、WorldWatchDashboard、WorldWatchMap、WorldWatchLive")
+        NSLog("世界动态组件目录 2.11/34：WorldWatchNews、WorldWatchDashboard、WorldWatchMap、WorldWatchLive")
     }
     var body: some Widget {
         WorldWatchWidget()

@@ -3,9 +3,16 @@ import Combine
 import OSLog
 import SwiftUI
 import Translation
+import UserNotifications
 import WidgetKit
 
 let storyLog = Logger(subsystem: "local.michael.worldwatch", category: "stories")
+
+struct ExtraFeedStatus: Equatable {
+    var fetched: Date?
+    var error: String?
+    var count: Int
+}
 
 struct CachedFeed: Codable {
     var events: [WorldEvent]
@@ -37,6 +44,23 @@ struct CachedFeed: Codable {
     @Published var interval: Double = UserDefaults.standard.double(forKey: "refreshInterval") == 0 ? 60 : UserDefaults.standard.double(forKey: "refreshInterval")
     @Published var stories: StoryResult?
     @Published var lastViewed = UserDefaults.standard.object(forKey: "lastViewedNews") as? Date
+    // 关注追踪 (2.10): followed topics, the followed view and the extra sources that fill it in.
+    @Published var topics = FollowTopic.selected
+    @Published var majorLevel = MajorLevel.selected
+    @Published var follow = FollowAnalysis()
+    @Published var extraStatus: [String: ExtraFeedStatus] = [:]
+    @Published var topicFeedsEnabled = UserDefaults.standard.object(forKey: "topicFeeds") as? Bool ?? true
+    @Published var sinaEnabled = UserDefaults.standard.object(forKey: "sinaFlashes") as? Bool ?? true
+    private var topicMatcher = TopicMatcher(FollowTopic.selected)
+    private var followedIDs = Set<String>()
+    private var extraAttempt: [String: Date] = [:]
+    // 提醒 (2.11)
+    @Published var alertSettings = AlertSettings.selected
+    @Published var notificationStatus = "尚未请求系统通知权限"
+    private var alertLedger = AlertLedger()
+    /// Stories already in the view when the app starts, or arriving with the first round of topic searches, are recorded silently.
+    private let alertWarmUntil = Date().addingTimeInterval(8 * 60)
+    private let alertLedgerURL = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("WorldWatch/alert-ledger.json")
     var enabledSources: [NewsSource] { NewsSource.all.filter { !disabled.contains($0.id) } }
     /// Retained headlines with story facts copied in (collapse keys, outlet counts, breaking).
     var rawEvents: [WorldEvent] { decoratedEvents(enabledSources.flatMap { feeds[$0.id]?.events ?? [] }, with: stories) }
@@ -46,6 +70,12 @@ struct CachedFeed: Codable {
         return storyLeadEvents(stories, enabledIDs: Set(enabledSources.map(\.id))).filter { !retained.contains($0.id) }
     }
     var events: [WorldEvent] { mergedEvents(rawEvents) }
+    var topicSources: [NewsSource] { topicFeedsEnabled ? NewsSource.topicSources(topics) : [] }
+    /// Index entries from the topic searches and 新浪, and any headline mentioning a followed topic, have their own allowance.
+    private func isFollowedEntry(_ event: WorldEvent) -> Bool { event.sourceID.hasPrefix("topic-") || event.sourceID == NewsSource.sina.id || followedIDs.contains(event.id) }
+    private func noteFollowed(_ events: [WorldEvent]) {
+        for event in events where !event.disaster && !topicMatcher.topicIDs(event).isEmpty { followedIDs.insert(event.id) }
+    }
     func storyMembers(_ event: WorldEvent) -> [WorldEvent] {
         guard let stories, let story = stories.story(for: event.id) else { return [] }
         return story.memberIDs.compactMap { stories.events[$0] }.sorted { ($0.date ?? .distantPast) > ($1.date ?? .distantPast) }
@@ -76,9 +106,12 @@ struct CachedFeed: Codable {
     private var observedConflicts: [ConflictSignal] = []
     private let cacheURL = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("WorldWatch/feeds.json")
     init() {
+        migrateToFollowedView()
         filter = Self.scope(for: widgetDisplayMode)
+        if let data = try? Data(contentsOf: alertLedgerURL), let ledger = try? JSONDecoder().decode(AlertLedger.self, from: data) { alertLedger = ledger }
         if let data = try? Data(contentsOf: storyIndexURL), let index = try? JSONDecoder().decode([String: StoryEntry].self, from: data) {
-            storyIndex = updatedStoryIndex(index, with: [])
+            noteFollowed(index.values.map(\.event))
+            storyIndex = updatedStoryIndex(index, with: [], followed: isFollowedEntry)
         }
         if newsFilter.eventOnly == nil {
             newsFilter.eventOnly = true
@@ -96,21 +129,144 @@ struct CachedFeed: Codable {
         readCameras()
         scheduleStories(delay: 0)
     }
-    static func scope(for mode: NewsDisplayMode) -> String { mode == .latest ? "最新" : mode == .rotation ? "综合" : "热点" }
+    static func scope(for mode: NewsDisplayMode) -> String { mode == .followed ? "关注" : mode == .latest ? "最新" : mode == .rotation ? "综合" : "热点" }
+    /// 2.10: the followed view becomes the default; earlier 关注关键词 become followed topics.
+    private func migrateToFollowedView() {
+        guard !UserDefaults.standard.bool(forKey: "followedViewV210") else { return }
+        var list = FollowTopic.selected
+        let known = Set(list.flatMap { ([$0.name] + $0.aliases).map(topicMatchText) })
+        for word in newsFilter.followed where !known.contains(topicMatchText(word)) && list.count < FollowTopic.limit {
+            list.append(FollowTopic(id: "kw-" + UUID().uuidString.prefix(8).lowercased(), name: word, aliases: [word]))
+        }
+        FollowTopic.selected = list
+        topics = list
+        topicMatcher = TopicMatcher(list)
+        widgetDisplayMode = .followed
+        NewsDisplayMode.selected = .followed
+        UserDefaults.standard.set(true, forKey: "followedViewV210")
+    }
+    /// The followed view from the current stories, off the main thread; used when topics or the gate change.
+    func refollow() {
+        guard let stories else { return }
+        let topics = self.topics, level = majorLevel, filter = newsFilter, disasters = rawEvents.filter(\.disaster)
+        Task {
+            let analysis = await Task.detached(priority: .userInitiated) { followAnalysis(stories, topics: topics, level: level, disasters: disasters, filter: filter) }.value
+            follow = analysis
+            followUpdated()
+            publishWidgetSnapshot(forceReload: true)
+        }
+    }
+    /// Work that follows a new followed view: alerts.
+    private func followUpdated() {
+        deliverAlerts(follow.rows)
+    }
+    private func deliverAlerts(_ rows: [WorldEvent]) {
+        var ledger = alertLedger
+        if Date() < alertWarmUntil { ledger.seeded = false }
+        let decision = alertDecision(rows: rows, topics: topics, settings: alertSettings, ledger: ledger)
+        alertLedger = decision.ledger
+        do {
+            try FileManager.default.createDirectory(at: alertLedgerURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try JSONEncoder().encode(alertLedger).write(to: alertLedgerURL, options: .atomic)
+        } catch { storyLog.error("提醒记录保存失败：\(error.localizedDescription, privacy: .public)") }
+        guard !decision.send.isEmpty else { return }
+        let center = UNUserNotificationCenter.current()
+        for row in decision.send {
+            let text = alertContent(row, topics: topics)
+            let content = UNMutableNotificationContent()
+            content.title = text.title
+            content.body = text.body
+            content.sound = .default
+            content.threadIdentifier = row.major == true ? "major" : (row.followTopics?.first ?? "follow")
+            content.userInfo = ["url": row.url.absoluteString]
+            center.add(UNNotificationRequest(identifier: "worldwatch." + alertKey(row), content: content, trigger: nil)) { error in
+                if let error { storyLog.error("通知发送失败：\(error.localizedDescription, privacy: .public)") }
+            }
+            storyLog.notice("提醒：\(text.title, privacy: .public) · \(row.displayTitle, privacy: .public)")
+        }
+    }
+    func setAlertSettings(_ value: AlertSettings) {
+        alertSettings = value
+        AlertSettings.selected = value
+        if value.major || value.topics { requestNotificationPermission() }
+    }
+    func requestNotificationPermission() {
+        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in
+            UNUserNotificationCenter.current().getNotificationSettings { settings in
+                let status: String
+                switch settings.authorizationStatus {
+                case .authorized, .provisional: status = settings.alertSetting == .enabled ? "系统通知已允许" : "系统通知已允许，但横幅被关闭"
+                case .denied: status = "系统通知被拒绝：请在系统设置 → 通知 → 世界动态中开启"
+                default: status = "尚未决定是否允许系统通知"
+                }
+                Task { @MainActor in self.notificationStatus = status }
+            }
+        }
+    }
+    func setTopicAlerts(_ topic: FollowTopic, on: Bool) {
+        setTopics(topics.map { item in
+            guard item.id == topic.id else { return item }
+            var updated = item; updated.alerts = on; return updated
+        })
+    }
+    func setTopics(_ list: [FollowTopic]) {
+        let trimmed = Array(list.prefix(FollowTopic.limit))
+        topics = trimmed
+        FollowTopic.selected = trimmed
+        topicMatcher = TopicMatcher(trimmed)
+        followedIDs = []
+        noteFollowed(storyIndex.values.map(\.event))
+        refollow()
+        Task { await refresh() }
+    }
+    func setMajorLevel(_ level: MajorLevel) { majorLevel = level; MajorLevel.selected = level; refollow() }
+    func setTopicFeeds(_ on: Bool) { topicFeedsEnabled = on; UserDefaults.standard.set(on, forKey: "topicFeeds"); scheduleStories(delay: 0) }
+    func setSina(_ on: Bool) { sinaEnabled = on; UserDefaults.standard.set(on, forKey: "sinaFlashes"); scheduleStories(delay: 0) }
+    /// 新浪 every round; each topic search at most every 12 minutes (20 with more than ten topics), four per round.
+    private func dueExtraSources(now: Date = Date()) -> [NewsSource] {
+        var due: [NewsSource] = sinaEnabled ? [.sina] : []
+        let interval: TimeInterval = topics.count > 10 ? 1200 : 720
+        let waiting = topicSources.filter { now.timeIntervalSince(extraAttempt[$0.id] ?? .distantPast) >= interval }
+            .sorted { (extraAttempt[$0.id] ?? .distantPast) < (extraAttempt[$1.id] ?? .distantPast) }
+        due += waiting.prefix(4)
+        for source in due { extraAttempt[source.id] = now }
+        return due
+    }
+    /// Extra-source headlines go to the story index only, never to the 100-item list: 新浪 keeps followed, non-tick flashes.
+    private func acceptExtra(_ id: String, _ items: [WorldEvent]) -> [WorldEvent] {
+        guard id == NewsSource.sina.id else { return items }
+        return items.filter { item in
+            let ids = topicMatcher.topicIDs(item)
+            return !ids.isEmpty && (!isMarketTick(item) || topics.contains { ids.contains($0.id) && $0.showTicks })
+        }
+    }
     /// Re-clusters the 72-hour index off the main thread; the latest call wins.
     func scheduleStories(delay: Double = 1) {
         storyTask?.cancel()
         storyTask = Task {
             if delay > 0 { do { try await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000)) } catch { return } }
-            let entries = Array(storyIndex.values.filter { !disabled.contains($0.event.sourceID) })
+            let topicsOn = topicFeedsEnabled, sinaOn = sinaEnabled
+            let entries = Array(storyIndex.values.filter { entry in
+                let id = entry.event.sourceID
+                if id.hasPrefix("topic-") { return topicsOn }
+                if id == NewsSource.sina.id { return sinaOn }
+                return !disabled.contains(id)
+            })
             let cache = storyCache
             let started = Date()
-            let result = await Task.detached(priority: .utility) { buildStories(entries, now: Date(), cache: cache) }.value
+            let topics = self.topics, level = majorLevel, filter = newsFilter, disasters = rawEvents.filter(\.disaster)
+            let (result, analysis) = await Task.detached(priority: .utility) {
+                let result = buildStories(entries, now: Date(), cache: cache)
+                return (result, followAnalysis(result, topics: topics, level: level, disasters: disasters, filter: filter))
+            }.value
             guard !Task.isCancelled else { return }
             let multi = result.stories.filter { $0.outlets.count >= 2 }
-            storyLog.notice("热点重算：\(entries.count, privacy: .public) 条 → \(result.stories.count, privacy: .public) 个事件，≥2 家 \(multi.count, privacy: .public)，≥3 家 \(multi.filter { $0.outlets.count >= 3 }.count, privacy: .public)，耗时 \(Date().timeIntervalSince(started), format: .fixed(precision: 2), privacy: .public) 秒")
+            storyLog.notice("热点重算：\(entries.count, privacy: .public) 条 → \(result.stories.count, privacy: .public) 个事件，≥2 家 \(multi.count, privacy: .public)，≥3 家 \(multi.filter { $0.outlets.count >= 3 }.count, privacy: .public)；关注 \(analysis.rows.count - analysis.majors.count, privacy: .public) 条，大事 \(analysis.majors.count, privacy: .public) 条，耗时 \(Date().timeIntervalSince(started), format: .fixed(precision: 2), privacy: .public) 秒")
             stories = result
+            follow = analysis
+            followUpdated()
             cache.retain(Set(storyIndex.keys))
+            followedIDs.formIntersection(storyIndex.keys)
             persistStoryIndex()
             publishWidgetSnapshot()
         }
@@ -185,8 +341,10 @@ struct CachedFeed: Codable {
         defer { translating = false }
         let balanced = displayPool(events, mode: widgetDisplayMode)
         let current = widgetDisplayMode == .rotation ? rotationEvents(balanced, at: Date(), limit: 6).events : Array(balanced.prefix(9))
-        let currentIDs = Set(current.map(\.id))
-        let original = current + balanced.filter { !currentIDs.contains($0.id) } + events.filter { item in !balanced.contains { $0.id == item.id } }
+        // The followed view comes first: it is the default list and its rows come from the index, not the 100-item list.
+        let followed = Array(follow.rows.filter { !$0.disaster }.prefix(80))
+        let currentIDs = Set((followed + current).map(\.id))
+        let original = followed + current + balanced.filter { !currentIDs.contains($0.id) } + events.filter { item in !balanced.contains { $0.id == item.id } && !currentIDs.contains(item.id) }
         let cached = await TitleTranslator.shared.applyCache(to: original)
         applyTranslated(cached)
         let pending = Array(cached.filter(needsTitleTranslation).prefix(24))
@@ -238,6 +396,7 @@ struct CachedFeed: Codable {
         newsFilter = value.cleaned
         NewsFilter.selected = newsFilter
         publishWidgetSnapshot(forceReload: true)
+        refollow()
     }
     func setWidgetDisplayMode(_ mode: NewsDisplayMode) {
         widgetDisplayMode = mode
@@ -348,8 +507,10 @@ struct CachedFeed: Codable {
         refreshing = true
         defer { refreshing = false }
         let sources = enabledSources
+        let extras = dueExtraSources()
+        let extraIDs = Set(extras.map(\.id))
         await withTaskGroup(of: (String, [WorldEvent]?, String?).self) { group in
-            for source in sources {
+            for source in sources + extras {
                 group.addTask {
                     do { return (source.id, try await fetchSource(source), nil) }
                     catch is CancellationError { return (source.id, nil, nil) }
@@ -358,9 +519,19 @@ struct CachedFeed: Codable {
                 }
             }
             for await (id, items, error) in group {
+                if extraIDs.contains(id) {
+                    if let items {
+                        let accepted = acceptExtra(id, await TitleTranslator.shared.applyCache(to: items))
+                        followedIDs.formUnion(accepted.map(\.id))
+                        storyIndex = updatedStoryIndex(storyIndex, with: accepted, followed: isFollowedEntry)
+                        extraStatus[id] = ExtraFeedStatus(fetched: Date(), error: nil, count: accepted.count)
+                    } else if let error { extraStatus[id] = ExtraFeedStatus(fetched: extraStatus[id]?.fetched, error: error, count: extraStatus[id]?.count ?? 0) }
+                    continue
+                }
                 if let items {
                     let cached = await TitleTranslator.shared.applyCache(to: items)
-                    storyIndex = updatedStoryIndex(storyIndex, with: cached)
+                    noteFollowed(cached.filter { storyIndex[$0.id] == nil })
+                    storyIndex = updatedStoryIndex(storyIndex, with: cached, followed: isFollowedEntry)
                     let previous = events
                     let previousConflicts = observedConflicts
                     observedConflicts = mergedConflictSignals(observedConflicts, conflictSignals(cached), enabledIDs: enabledSources.map(\.id))
@@ -373,7 +544,7 @@ struct CachedFeed: Codable {
                 else if let error { errors[id] = error }
             }
         }
-        await TitleTranslator.shared.prune(keeping: Set(feeds.values.flatMap { $0.events.map(\.title) }))
+        await TitleTranslator.shared.prune(keeping: Set(feeds.values.flatMap { $0.events.map(\.title) }).union(storyIndex.values.map(\.event.title)))
         lastCheck = Date()
         rotationDate = Date()
         NSLog("世界动态刷新完成：%ld/%ld 来源成功，%ld 条可显示", healthyCount, enabledSources.count, events.count)
@@ -401,6 +572,7 @@ struct CachedFeed: Codable {
         var snapshot = refreshedSnapshot(previous: previous, results: results, now: checked == .distantPast ? publishedAt : checked, enabledIDs: enabledSources.map(\.id), mode: widgetDisplayMode, observedAt: publishedAt)
         snapshot.conflictSignals = mergedConflictSignals(snapshot.conflictSignals ?? [], observedConflicts, enabledIDs: enabledSources.map(\.id), now: publishedAt)
         snapshot.updatedAt = publishedAt
+        snapshot.followedEvents = Array(follow.rows.prefix(40))
         if let previous, !sameDigest(previous.rotationEvents ?? previous.events, snapshot.rotationEvents ?? snapshot.events) {
             snapshot.changedAt = publishedAt
         }
@@ -411,6 +583,7 @@ struct CachedFeed: Codable {
                 || !sameDigest(mergedEvents($0.sourceFeeds?.values.flatMap(\.events) ?? []), mergedEvents(snapshot.sourceFeeds?.values.flatMap(\.events) ?? []))
                 || mapMarkers($0.sourceFeeds?.values.flatMap(\.events) ?? []) != mapMarkers(snapshot.sourceFeeds?.values.flatMap(\.events) ?? [])
                 || $0.conflictSignals != snapshot.conflictSignals
+                || !sameRenderedNews($0.followedEvents ?? [], snapshot.followedEvents ?? [])
         } ?? true
         do {
             let saved = try store.write(snapshot)
@@ -428,13 +601,22 @@ struct EventRow: View {
     let event: WorldEvent
     var members: [WorldEvent] = []
     var isNew = false
+    var topics: [FollowTopic] = []
     @State private var hovering = false
     @State private var showMembers = false
     var body: some View {
         VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 6) {
                 if isNew { Circle().fill(Color.accentColor).frame(width: 6, height: 6).accessibilityLabel("新") }
+                if event.major == true { Text("大事").fontWeight(.semibold).foregroundStyle(Color.orange) }
+                if let label = topicLabel(event.followTopics, topics: topics) { Text(label).fontWeight(.semibold).foregroundStyle(Color.accentColor) }
                 Text(event.sourceName).fontWeight(.semibold).foregroundStyle(.secondary)
+                if let note = event.factNote {
+                    Text(note).fontWeight(.medium).foregroundStyle(.secondary)
+                        .padding(.horizontal, 4).overlay(RoundedRectangle(cornerRadius: 3).stroke(Color.secondary.opacity(0.5), lineWidth: 0.5))
+                        .help("措辞未经证实（据悉、消息人士、谈判中等），两家以上一档媒体报道前保留此标记")
+                }
+                if event.storyOutlets == nil, let count = event.historyOutlets, count >= 2 { Text("· \(count) 家").foregroundStyle(.secondary) }
                 if let outlets = event.storyOutlets, outlets.count >= 2 {
                     Button { showMembers = true } label: {
                         Text("· \(outlets.count) 家").fontWeight(.medium).foregroundStyle(outlets.count >= 3 ? Color.orange : Color.secondary)
@@ -506,8 +688,17 @@ struct WorldView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @ObservedObject var store: EventStore
     @State private var showCameras = false
+    static let followScopes = ["关注", "大事"]
     static let scopes = ["热点", "综合", "最新", "国内", "国际", "政治", "财经", "科技", "文娱", "体育", "灾害"]
+    var scopeTitle: String {
+        guard store.filter.hasPrefix("topic:") else { return store.filter }
+        return store.topics.first { "topic:" + $0.id == store.filter }?.name ?? "关注"
+    }
+    var isFollowScope: Bool { Self.followScopes.contains(store.filter) || store.filter.hasPrefix("topic:") }
     var rows: [WorldEvent] {
+        if store.filter == "关注" { return store.follow.rows }
+        if store.filter == "大事" { return store.follow.majors }
+        if store.filter.hasPrefix("topic:") { return store.follow.byTopic[String(store.filter.dropFirst(6))] ?? [] }
         let raw = store.rawEvents
         if store.filter == "热点" { return hotEvents(raw + store.leadEvents, now: store.rotationDate, filter: store.newsFilter) }
         let personal = store.newsFilter.mode == .personal
@@ -587,14 +778,22 @@ struct WorldView: View {
                             var value = store.newsFilter; value.eventOnly = on; store.setNewsFilter(value)
                         }))
                     }
-                    Section("范围") {
+                    Section("关注") {
+                        Picker("关注", selection: $store.filter) {
+                            Text("关注对象与大事").tag("关注")
+                            Text("只看大事").tag("大事")
+                            ForEach(store.topics) { Text($0.name).tag("topic:" + $0.id) }
+                        }
+                        .pickerStyle(.inline).labelsHidden()
+                    }
+                    Section("全部新闻") {
                     Picker("范围", selection: $store.filter) {
                         ForEach(Self.scopes, id: \.self) { Text($0).tag($0) }
                     }
                     .pickerStyle(.inline).labelsHidden()
                     }
                 } label: {
-                    Text("\(store.filter) · \(rows.count) 条").font(.system(size: 12, weight: .medium))
+                    Text("\(scopeTitle) · \(rows.count) 条").font(.system(size: 12, weight: .medium))
                 }
                 .menuStyle(.button).buttonStyle(.borderless).fixedSize()
                 .accessibilityLabel("新闻范围")
@@ -621,6 +820,15 @@ struct WorldView: View {
                 CameraGrid(cities: store.selectedCities, frames: store.cameraManifests.mapValues(\.frames), index: Int(context.date.timeIntervalSince1970 / 60))
                     .padding(12)
             }
+        } else if rows.isEmpty && isFollowScope {
+            ContentUnavailableView {
+                Label(store.stories == nil ? "正在整理关注对象的报道" : store.filter == "大事" ? "过去 24 小时没有达到门槛的大事" : "暂无关注对象的报道", systemImage: "scope")
+            } description: {
+                Text(store.stories == nil ? "首次启动需要抓取按主题补全的来源并聚类，约需几分钟。" : "关注对象可在设置中增删；大事门槛可调为宽松。")
+            } actions: {
+                Button("调整关注对象") { store.showSources = true }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else if rows.isEmpty {
             ContentUnavailableView {
                 if store.newsFilter.mode == .personal || store.newsFilter.eventsOnly { Label("没有符合条件的新闻", systemImage: "line.3.horizontal.decrease.circle") }
@@ -642,15 +850,16 @@ struct WorldView: View {
                     .font(.system(size: 12)).foregroundStyle(.secondary).lineLimit(1)
                     .frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 20).padding(.top, 8)
             }
+            let shown = Array(rows.prefix(isFollowScope ? 300 : retainedNewsLimit))
             ScrollView {
                 LazyVStack(spacing: 2) {
-                    ForEach(rows.prefix(retainedNewsLimit)) { event in
-                        EventRow(event: event, members: event.storyOutlets == nil ? [] : store.storyMembers(event), isNew: store.isNew(event))
+                    ForEach(shown) { event in
+                        EventRow(event: event, members: event.storyOutlets == nil ? [] : store.storyMembers(event), isNew: store.isNew(event), topics: store.topics)
                             .transition(reduceMotion ? .opacity : .asymmetric(insertion: .move(edge: .top).combined(with: .opacity), removal: .opacity))
                     }
                 }
                 .padding(.horizontal, 10).padding(.vertical, 8)
-                .animation(reduceMotion ? .easeOut(duration: 0.15) : .spring(response: 0.48, dampingFraction: 0.92), value: Array(rows.prefix(retainedNewsLimit).map(\.id)))
+                .animation(reduceMotion ? .easeOut(duration: 0.15) : .spring(response: 0.48, dampingFraction: 0.92), value: shown.map(\.id))
             }
             .clipped()
         }
@@ -803,11 +1012,178 @@ struct NewsFilterSection: View {
     }
 }
 
+/// 关注对象 settings: each topic's name and aliases, the big-event gate and the extra sources.
+struct FollowTopicsSection: View {
+    @ObservedObject var store: EventStore
+    @State private var newName = ""
+    @State private var newAliases = ""
+    private var topicFeedStatus: String {
+        let statuses = store.topicSources.compactMap { store.extraStatus[$0.id] }
+        guard store.topicFeedsEnabled else { return "已关闭：只用固定来源里的报道" }
+        guard !statuses.isEmpty else { return "每个对象一个中文、一个英文 Google 新闻搜索，约 12 分钟轮询一次" }
+        let failing = statuses.filter { $0.error != nil }.count
+        let latest = statuses.compactMap(\.fetched).max()
+        return "\(store.topicSources.count) 个搜索，已抓取 \(statuses.count) 个" + (failing > 0 ? "，\(failing) 个失败" : "") + (latest.map { "，\(shortTimeLabel($0)) 更新" } ?? "")
+    }
+    private var sinaStatus: String {
+        guard store.sinaEnabled else { return "已关闭" }
+        guard let status = store.extraStatus[NewsSource.sina.id] else { return "只收提到关注对象、又不是行情跳动的快讯" }
+        if let error = status.error { return "连接失败：\(error)" }
+        return "最近一次收下 \(status.count) 条" + (status.fetched.map { " · \(shortTimeLabel($0)) 更新" } ?? "")
+    }
+    private func add() {
+        let name = newName.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty, store.topics.count < FollowTopic.limit else { return }
+        let aliases = splitAliases(newAliases)
+        store.setTopics(store.topics + [FollowTopic(id: "t-" + UUID().uuidString.prefix(8).lowercased(), name: name, aliases: aliases.isEmpty ? [name] : aliases)])
+        newName = ""; newAliases = ""
+    }
+    var body: some View {
+        Section {
+            ForEach(store.topics) { topic in
+                TopicEditor(topic: topic, count: store.follow.byTopic[topic.id]?.count ?? 0,
+                            save: { updated in store.setTopics(store.topics.map { $0.id == updated.id ? updated : $0 }) },
+                            delete: { store.setTopics(store.topics.filter { $0.id != topic.id }) })
+                .id(topic)
+            }
+            VStack(alignment: .leading, spacing: 6) {
+                Text("添加关注对象").fontWeight(.medium)
+                TextField("名称，例如 OpenAI", text: $newName).textFieldStyle(.roundedBorder).onSubmit(add)
+                TextField("别名，用逗号分隔，例如 OpenAI, 奥特曼, Sam Altman", text: $newAliases).textFieldStyle(.roundedBorder).onSubmit(add)
+                HStack {
+                    Button("添加", action: add).disabled(newName.trimmingCharacters(in: .whitespaces).isEmpty || store.topics.count >= FollowTopic.limit)
+                    Spacer()
+                    Button("恢复预置的 7 个") { store.setTopics(FollowTopic.presets) }
+                }
+            }
+            VStack(alignment: .leading, spacing: 6) {
+                Picker("大事门槛", selection: Binding(get: { store.majorLevel }, set: { store.setMajorLevel($0) })) {
+                    ForEach(MajorLevel.allCases, id: \.self) { Text($0.rawValue).tag($0) }
+                }
+                .pickerStyle(.segmented)
+                Text("不在关注清单里的事，达到门槛才显示：" + store.majorLevel.detail + "。同一事件按独立媒体计数。").font(.system(size: 11)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            }
+            Toggle(isOn: Binding(get: { store.topicFeedsEnabled }, set: { store.setTopicFeeds($0) })) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("按主题补全来源")
+                    Text(topicFeedStatus).font(.system(size: 11)).foregroundStyle(.secondary)
+                }
+            }
+            Toggle(isOn: Binding(get: { store.sinaEnabled }, set: { store.setSina($0) })) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("新浪财经 7×24 快讯")
+                    Text(sinaStatus).font(.system(size: 11)).foregroundStyle(.secondary)
+                }
+            }
+        } header: { Text("关注对象") } footer: {
+            Text("关注列表只收事实报道：评论、访谈、周报和展会类软新闻不收；行情跳动默认不收。只有一家媒体报道时，须是通讯社、主流媒体或官方来源；措辞未经证实的标「据报道」。最多 \(FollowTopic.limit) 个对象。")
+                .foregroundStyle(.secondary)
+        }
+    }
+}
+
+/// 提醒 settings: big events, followed-topic news, quiet hours.
+struct AlertSection: View {
+    @ObservedObject var store: EventStore
+    private func update(_ change: (inout AlertSettings) -> Void) {
+        var value = store.alertSettings
+        change(&value)
+        store.setAlertSettings(value)
+    }
+    var body: some View {
+        Section {
+            Toggle(isOn: Binding(get: { store.alertSettings.major }, set: { on in update { $0.major = on } })) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("重磅大事")
+                    Text("达到大事门槛、或红色预警与 7 级以上地震").font(.system(size: 11)).foregroundStyle(.secondary)
+                }
+            }
+            Toggle(isOn: Binding(get: { store.alertSettings.topics }, set: { on in update { $0.topics = on } })) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("关注对象的新进展")
+                    Text("已有两家媒体（含一家通讯社、主流媒体或官方来源）报道的新事件；每个对象可在上方单独关闭").font(.system(size: 11)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            Toggle("免打扰时段", isOn: Binding(get: { store.alertSettings.quiet }, set: { on in update { $0.quiet = on } }))
+            if store.alertSettings.quiet {
+                HStack {
+                    Picker("从", selection: Binding(get: { store.alertSettings.quietStart }, set: { hour in update { $0.quietStart = hour } })) {
+                        ForEach(0..<24, id: \.self) { Text(String(format: "%02d:00", $0)).tag($0) }
+                    }
+                    Picker("到", selection: Binding(get: { store.alertSettings.quietEnd }, set: { hour in update { $0.quietEnd = hour } })) {
+                        ForEach(0..<24, id: \.self) { Text(String(format: "%02d:00", $0)).tag($0) }
+                    }
+                }
+            }
+            LabeledContent("系统通知") { Text(store.notificationStatus).foregroundStyle(.secondary).multilineTextAlignment(.trailing) }
+        } header: { Text("提醒") } footer: {
+            Text("同一事件只提醒一次，只提醒首报 3 小时内的事；每次最多 3 条，每小时最多 \(alertsPerHour) 条、每天最多 \(alertsPerDay) 条，同一对象每小时最多 \(alertsPerTopicHour) 条。免打扰时段内不提醒，结束后仍在 3 小时内的会补发。App 启动后的前几分钟只记录、不提醒。点击通知打开原报道。")
+                .foregroundStyle(.secondary)
+        }
+    }
+}
+
+func splitAliases(_ text: String) -> [String] {
+    var seen = Set<String>()
+    return text.components(separatedBy: CharacterSet(charactersIn: ",，、;；\n")).map { $0.trimmingCharacters(in: .whitespaces) }
+        .filter { !$0.isEmpty && seen.insert($0.lowercased()).inserted }
+}
+
+struct TopicEditor: View {
+    let topic: FollowTopic
+    let count: Int
+    let save: (FollowTopic) -> Void
+    let delete: () -> Void
+    @State private var name: String
+    @State private var aliases: String
+    init(topic: FollowTopic, count: Int, save: @escaping (FollowTopic) -> Void, delete: @escaping () -> Void) {
+        self.topic = topic; self.count = count; self.save = save; self.delete = delete
+        _name = State(initialValue: topic.name)
+        _aliases = State(initialValue: topic.aliases.joined(separator: ", "))
+    }
+    private var edited: FollowTopic {
+        var updated = topic
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmed.isEmpty { updated.name = trimmed }
+        let list = splitAliases(aliases)
+        if !list.isEmpty, list != topic.aliases { updated.aliases = list; updated.fillQueries() }
+        return updated
+    }
+    var body: some View {
+        DisclosureGroup {
+            VStack(alignment: .leading, spacing: 6) {
+                TextField("名称", text: $name).textFieldStyle(.roundedBorder).onSubmit { save(edited) }
+                TextField("别名，用逗号分隔", text: $aliases, axis: .vertical).textFieldStyle(.roundedBorder).lineLimit(1...4).onSubmit { save(edited) }
+                if !topic.pairs.isEmpty {
+                    Text("另含共现规则：" + topic.pairs.map { $0.prefix(3).joined(separator: "/") + "…" }.joined(separator: " 与 ") + " 同时出现也算").font(.system(size: 11)).foregroundStyle(.secondary)
+                }
+                Text("补全搜索：\(topic.queryZH) ｜ \(topic.queryEN)").font(.system(size: 11)).foregroundStyle(.secondary).textSelection(.enabled)
+                Toggle("显示股价与指数涨跌", isOn: Binding(get: { topic.showTicks }, set: { on in var updated = topic; updated.showTicks = on; save(updated) }))
+                Toggle("新进展推送提醒", isOn: Binding(get: { topic.alerts }, set: { on in var updated = topic; updated.alerts = on; save(updated) }))
+                HStack {
+                    Button("保存修改") { save(edited) }.disabled(edited == topic)
+                    Spacer()
+                    Button("删除", role: .destructive, action: delete)
+                }
+            }
+            .padding(.vertical, 4)
+        } label: {
+            HStack {
+                Text(topic.name)
+                Spacer()
+                Text("3 天内 \(count) 件").font(.system(size: 11)).foregroundStyle(.secondary).monospacedDigit()
+            }
+        }
+    }
+}
+
 struct SettingsView: View {
     @ObservedObject var store: EventStore
     var body: some View {
         VStack(spacing: 0) {
             Form {
+                FollowTopicsSection(store: store)
+                AlertSection(store: store)
                 Section {
                     Picker("显示方式", selection: Binding(get: { store.widgetDisplayMode }, set: { store.setWidgetDisplayMode($0) })) {
                         ForEach(NewsDisplayMode.allCases, id: \.self) { Text($0.title).tag($0) }
@@ -817,7 +1193,7 @@ struct SettingsView: View {
                         ForEach(DomesticShare.allCases, id: \.self) { Text($0.rawValue).tag($0) }
                     }
                 } header: { Text("小组件") } footer: {
-                    Text((store.widgetDisplayMode == .latest ? "按报道时间排列，新报道出现在最上方。" : store.widgetDisplayMode == .rotation ? "混合不同领域的近期报道并定时轮换，轮换不代表新发布。" : "热点按报道同一事件的媒体数排序，由 App 计算；App 未运行时组件按最新优先显示。")
+                    Text((store.widgetDisplayMode == .followed ? "只显示关注对象的报道和达到门槛的大事，按首报时间排列；由 App 计算，App 两小时未运行时改用关键词匹配。" : store.widgetDisplayMode == .latest ? "按报道时间排列，新报道出现在最上方。" : store.widgetDisplayMode == .rotation ? "混合不同领域的近期报道并定时轮换，轮换不代表新发布。" : "热点按报道同一事件的媒体数排序，由 App 计算；App 未运行时组件按最新优先显示。")
                          + "北京时间白天国内发稿集中，「均衡」时国内新闻约占三分之一、「少」约占五分之一，超出的顺延到后面，不会丢弃；同时作用于应用里的「最新」列表。")
                         .foregroundStyle(.secondary)
                 }
@@ -953,7 +1329,7 @@ struct SettingsView: View {
     }
 }
 
-@MainActor final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
+@MainActor final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, UNUserNotificationCenterDelegate {
     let store = EventStore()
     var panel: NSWindow!
     var item: NSStatusItem!
@@ -990,6 +1366,8 @@ struct SettingsView: View {
         NotificationCenter.default.addObserver(forName: NSWindow.didResignKeyNotification, object: panel, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.store.markViewed() }
         }
+        UNUserNotificationCenter.current().delegate = self
+        if store.alertSettings.major || store.alertSettings.topics { store.requestNotificationPermission() }
         store.start()
         store.startCameras()
         store.startMapLayers()
@@ -1030,6 +1408,16 @@ struct SettingsView: View {
     func application(_ application: NSApplication, open urls: [URL]) { show() }
     @objc func refresh() { Task { await store.refresh(reloadWidget: true) } }
     @objc func quit() { NSApp.terminate(nil) }
+    // Notifications show while the app runs (it is a menu-bar app, so it is often "active"); clicking opens the report.
+    nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification, withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void) {
+        completionHandler([.banner, .list, .sound])
+    }
+    nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse, withCompletionHandler completionHandler: @escaping () -> Void) {
+        if let text = response.notification.request.content.userInfo["url"] as? String, let url = URL(string: text) {
+            DispatchQueue.main.async { NSWorkspace.shared.open(url) }
+        }
+        completionHandler()
+    }
 }
 
 @main struct WorldWatchMain {

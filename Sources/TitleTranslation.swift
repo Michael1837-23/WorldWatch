@@ -31,7 +31,7 @@ func translatePublicHeadline(_ title: String) async throws -> String {
 }
 
 func needsTitleTranslation(_ event: WorldEvent) -> Bool {
-    event.sourceID != "bbc-zh" && !event.sourceID.hasPrefix("cns-") && NewsSource.all.first(where: { $0.id == event.sourceID })?.language != "zh" && event.translatedTitle == nil && event.title.range(of: "[a-zA-Z]{4}", options: .regularExpression) != nil
+    event.sourceID != "bbc-zh" && !event.sourceID.hasPrefix("cns-") && NewsSource.find(event.sourceID)?.language != "zh" && event.translatedTitle == nil && event.title.range(of: "[a-zA-Z]{4}", options: .regularExpression) != nil
 }
 
 actor TitleTranslator {
