@@ -211,6 +211,7 @@ func topicChecks() throws {
     for title in ["Trump's GOP was all they knew. Now some wonder if MAGA is dead", "Jensen Huang's Leather Jacket Comes Back to Bite Him", "11 names to watch in Nvidia's CEO search"] {
         require(isSoftNews(item("f-" + title, title, now: now)), "特写与分析：\(title)")
     }
+    require(isSoftNews(item("f-nl", "160th anniversary of Sun Yat-sen’s birth; US-China; Nvidia fallout; South Korea", now: now)) && isSoftNews(item("f-sem", "2026年两岸科技创新融合发展研讨会在厦门开幕", now: now)), "简报与研讨会")
     require(isSoftNews(item("f-cn", "放行对华H200芯片出口——特朗普和黄仁勋近两年交往全梳理", now: now)) && !isSoftNews(item("f-us", "U.S. Navy deploys carrier to Taiwan Strait", now: now)), "梳理稿与缩写不误判")
 
     // Topic history and topic pages.
@@ -283,6 +284,18 @@ func followProbe() async throws {
             }
             let english = follow.rows.prefix(40).filter { $0.translatedTitle == nil && !containsHan($0.title) }.count
             print("  前 40 条中仍是英文标题：\(english) 条")
+        }
+        if level == .standard, let flag = CommandLine.arguments.firstIndex(of: "--topic"), CommandLine.arguments.count > flag + 1 {
+            let id = CommandLine.arguments[flag + 1]
+            for row in follow.byTopic[id] ?? [] { print("  [\(id)] \(row.sourceName)·\(row.storyOutlets?.count ?? 1)家 | \(row.displayTitle.prefix(70))") }
+            let needle = CommandLine.arguments.count > flag + 2 ? CommandLine.arguments[flag + 2] : ""
+            if !needle.isEmpty {
+                for story in result.stories {
+                    let members = story.memberIDs.compactMap { result.events[$0] }
+                    guard members.contains(where: { $0.title.contains(needle) || ($0.translatedTitle ?? "").contains(needle) }) else { continue }
+                    print("  事件 \(story.outlets.count) 家：" + members.map { "\(outletTier($0).rawValue)档 \($0.sourceName)：\($0.title.prefix(50)) 软=\(isSoftNews($0)) 非事件=\(isNonEventHeadline($0)) 事件=\(isEventHeadline($0)) 对象=\(matcher.topicIDs($0))" }.joined(separator: "\n      "))
+                }
+            }
         }
         if level == .standard {
             for topic in topics {

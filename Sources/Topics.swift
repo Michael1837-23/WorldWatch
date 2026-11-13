@@ -259,7 +259,8 @@ private let softNewsPattern = try! NSRegularExpression(pattern: #"农博会|花�
 // Analysis and features in English: listicles, explainers, two-sentence feature headlines ("… knew. Now some wonder …").
 private let featurePattern = try! NSRegularExpression(pattern: #"\b(?:names to watch|what to (?:know|watch|expect)|things to know|here'?s (?:what|why|how)|the rise and fall|what (?:we|you) know|explained|analysis|opinion|takeaways|lessons from|comes back to bite|a (?:tougher|bigger) test)\b|^\d+ (?:names|things|ways|reasons|takeaways|questions|charts|people)\b"#, options: .caseInsensitive)
 private let twoSentencePattern = try! NSRegularExpression(pattern: #"[a-z]{2,}[.!?]\s+[A-Z][a-z]"#)
-private let chineseRoundupPattern = try! NSRegularExpression(pattern: #"梳理|盘点|回顾|复盘|一文|细数|全解析|时间线"#)
+// Roundups and newsletters ("A; B; C"), seminars and "交出答卷" style pieces.
+private let chineseRoundupPattern = try! NSRegularExpression(pattern: #"梳理|盘点|回顾|复盘|一文|细数|全解析|时间线|研讨会|交流会|恳谈会|答卷|[;；][^;；]+[;；]"#)
 
 /// Fairs, exchanges, study tours, theory pieces, commentary columns, roundups and features:
 /// true stories, but small stuff or analysis for the followed view.
