@@ -61,6 +61,11 @@ struct CachedFeed: Codable {
     /// Stories already in the view when the app starts, or arriving with the first round of topic searches, are recorded silently.
     private let alertWarmUntil = Date().addingTimeInterval(8 * 60)
     private let alertLedgerURL = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("WorldWatch/alert-ledger.json")
+    // 对象页 (2.12): followed stories kept for two weeks after they leave the 72-hour index.
+    @Published var topicHistory: [TopicHistoryItem] = []
+    private var historySaved = Date.distantPast
+    private let topicHistoryURL = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("WorldWatch/topic-history.json")
+    func topicRows(_ id: String) -> [WorldEvent] { topicTimeline(id, live: follow.rows, history: topicHistory) }
     var enabledSources: [NewsSource] { NewsSource.all.filter { !disabled.contains($0.id) } }
     /// Retained headlines with story facts copied in (collapse keys, outlet counts, breaking).
     var rawEvents: [WorldEvent] { decoratedEvents(enabledSources.flatMap { feeds[$0.id]?.events ?? [] }, with: stories) }
@@ -109,6 +114,7 @@ struct CachedFeed: Codable {
         migrateToFollowedView()
         filter = Self.scope(for: widgetDisplayMode)
         if let data = try? Data(contentsOf: alertLedgerURL), let ledger = try? JSONDecoder().decode(AlertLedger.self, from: data) { alertLedger = ledger }
+        if let data = try? Data(contentsOf: topicHistoryURL), let history = try? JSONDecoder().decode([TopicHistoryItem].self, from: data) { topicHistory = mergedTopicHistory(history, rows: []) }
         if let data = try? Data(contentsOf: storyIndexURL), let index = try? JSONDecoder().decode([String: StoryEntry].self, from: data) {
             noteFollowed(index.values.map(\.event))
             storyIndex = updatedStoryIndex(index, with: [], followed: isFollowedEntry)
@@ -156,9 +162,23 @@ struct CachedFeed: Codable {
             publishWidgetSnapshot(forceReload: true)
         }
     }
-    /// Work that follows a new followed view: alerts.
+    /// Work that follows a new followed view: big-event ordering, alerts and the two-week topic history
+    /// (saved at most every five minutes).
     private func followUpdated() {
+        let promoted = promotedRows(follow.rows, since: alertLedger.majorSince)
+        alertLedger.majorSince = promoted.since
+        follow.rows = promoted.rows
         deliverAlerts(follow.rows)
+        topicHistory = mergedTopicHistory(topicHistory, rows: follow.rows)
+        guard Date().timeIntervalSince(historySaved) >= 300 else { return }
+        historySaved = Date()
+        let history = topicHistory, url = topicHistoryURL
+        Task.detached(priority: .utility) {
+            do {
+                try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+                try JSONEncoder().encode(history).write(to: url, options: .atomic)
+            } catch { storyLog.error("对象历史保存失败：\(error.localizedDescription, privacy: .public)") }
+        }
     }
     private func deliverAlerts(_ rows: [WorldEvent]) {
         var ledger = alertLedger
@@ -651,36 +671,55 @@ struct EventRow: View {
     }
 }
 
-/// Minimal event page: every report of the story, newest first.
+/// Event page: the story's headline, first report and outlet count, then each outlet's first headline,
+/// Chinese-language and foreign media side by side so their framing can be compared.
 struct StoryMembersView: View {
     let event: WorldEvent
     let members: [WorldEvent]
     var body: some View {
+        let sides = eventSides(members)
+        let both = !sides.chinese.isEmpty && !sides.foreign.isEmpty
         VStack(alignment: .leading, spacing: 8) {
-            Text("\(event.storyOutlets?.count ?? members.count) 家媒体报道" + (event.storyFirstDate.map { " · 首报 \(shortTimeLabel($0))" } ?? ""))
-                .font(.system(size: 12, weight: .semibold)).foregroundStyle(.secondary)
+            Text(event.displayTitle).font(.system(size: 14, weight: .semibold)).fixedSize(horizontal: false, vertical: true)
+            HStack(spacing: 6) {
+                Text(["\(event.storyOutlets?.count ?? members.count) 家媒体",
+                      event.storyFirstDate.map { "首报 \(shortTimeLabel($0))" },
+                      sides.primaryOutlets > 0 ? "其中一档 \(sides.primaryOutlets) 家" : nil].compactMap { $0 }.joined(separator: " · "))
+                if let note = event.factNote { Text("· " + note) }
+            }
+            .font(.system(size: 11)).foregroundStyle(.secondary)
             ScrollView {
-                VStack(alignment: .leading, spacing: 2) {
-                    ForEach(members) { member in
-                        Button { NSWorkspace.shared.open(member.url) } label: {
-                            VStack(alignment: .leading, spacing: 2) {
-                                HStack(spacing: 6) {
-                                    Text(member.sourceName).fontWeight(.semibold)
-                                    if let date = member.date { Text(eventTimeLabel(member) ?? shortTimeLabel(date)).monospacedDigit() }
-                                }
-                                .font(.system(size: 11)).foregroundStyle(.secondary)
-                                Text(member.displayTitle).font(.system(size: 13)).foregroundStyle(.primary).fixedSize(horizontal: false, vertical: true)
-                            }
-                            .frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 4).contentShape(Rectangle())
-                        }
-                        .buttonStyle(.plain)
-                        .help(member.translatedTitle == nil ? member.url.host ?? "" : "原文：\(member.title)")
-                    }
+                HStack(alignment: .top, spacing: 14) {
+                    if !sides.chinese.isEmpty { column(both ? "中文媒体" : "报道", sides.chinese) }
+                    if !sides.foreign.isEmpty { column(both ? "外媒" : "报道", sides.foreign) }
                 }
             }
-            .frame(maxHeight: 360)
+            .frame(maxHeight: 420)
+            Text("每家媒体只列最早一条；● 为通讯社、主流媒体或官方来源。点击标题打开原报道。").font(.system(size: 10)).foregroundStyle(.tertiary)
         }
-        .padding(14).frame(width: 380)
+        .padding(14).frame(width: both ? 620 : 400)
+    }
+    private func column(_ title: String, _ items: [WorldEvent]) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text("\(title)（\(items.count) 家）").font(.system(size: 12, weight: .semibold)).foregroundStyle(.secondary).padding(.bottom, 2)
+            ForEach(items) { member in
+                Button { NSWorkspace.shared.open(member.url) } label: {
+                    VStack(alignment: .leading, spacing: 2) {
+                        HStack(spacing: 5) {
+                            if outletTier(member) == .primary { Circle().fill(Color.accentColor).frame(width: 5, height: 5) }
+                            Text(member.sourceName).fontWeight(.semibold).lineLimit(1)
+                            if let date = member.date { Text(eventTimeLabel(member) ?? shortTimeLabel(date)).monospacedDigit() }
+                        }
+                        .font(.system(size: 11)).foregroundStyle(.secondary)
+                        Text(member.displayTitle).font(.system(size: 13)).foregroundStyle(.primary).fixedSize(horizontal: false, vertical: true)
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading).padding(.vertical, 4).contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help(member.translatedTitle == nil || member.translatedTitle == member.title ? member.url.host ?? "" : "原文：\(member.title)")
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
@@ -698,7 +737,7 @@ struct WorldView: View {
     var rows: [WorldEvent] {
         if store.filter == "关注" { return store.follow.rows }
         if store.filter == "大事" { return store.follow.majors }
-        if store.filter.hasPrefix("topic:") { return store.follow.byTopic[String(store.filter.dropFirst(6))] ?? [] }
+        if store.filter.hasPrefix("topic:") { return store.topicRows(String(store.filter.dropFirst(6))) }
         let raw = store.rawEvents
         if store.filter == "热点" { return hotEvents(raw + store.leadEvents, now: store.rotationDate, filter: store.newsFilter) }
         let personal = store.newsFilter.mode == .personal
@@ -851,11 +890,23 @@ struct WorldView: View {
                     .frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 20).padding(.top, 8)
             }
             let shown = Array(rows.prefix(isFollowScope ? 300 : retainedNewsLimit))
+            if store.filter.hasPrefix("topic:") {
+                let live = shown.filter { $0.historyOutlets == nil }.count
+                Text("\(scopeTitle)：3 天内 \(live) 件" + (shown.count > live ? "，更早 \(shown.count - live) 件（保留两周）" : "") + "，按首报时间倒序")
+                    .font(.system(size: 12)).foregroundStyle(.secondary).lineLimit(1)
+                    .frame(maxWidth: .infinity, alignment: .leading).padding(.horizontal, 20).padding(.top, 8)
+            }
             ScrollView {
-                LazyVStack(spacing: 2) {
-                    ForEach(shown) { event in
-                        EventRow(event: event, members: event.storyOutlets == nil ? [] : store.storyMembers(event), isNew: store.isNew(event), topics: store.topics)
-                            .transition(reduceMotion ? .opacity : .asymmetric(insertion: .move(edge: .top).combined(with: .opacity), removal: .opacity))
+                LazyVStack(alignment: .leading, spacing: 2) {
+                    ForEach(daySections(shown), id: \.label) { section in
+                        if let label = section.label.nilIfEmpty {
+                            Text(label).font(.system(size: 12, weight: .semibold)).foregroundStyle(.secondary)
+                                .padding(.horizontal, 10).padding(.top, 10).padding(.bottom, 2)
+                        }
+                        ForEach(section.rows) { event in
+                            EventRow(event: event, members: event.storyOutlets == nil ? [] : store.storyMembers(event), isNew: store.isNew(event), topics: store.topics)
+                                .transition(reduceMotion ? .opacity : .asymmetric(insertion: .move(edge: .top).combined(with: .opacity), removal: .opacity))
+                        }
                     }
                 }
                 .padding(.horizontal, 10).padding(.vertical, 8)
@@ -863,6 +914,17 @@ struct WorldView: View {
             }
             .clipped()
         }
+    }
+
+    /// Topic pages group rows under 今天／昨天／date headings; other lists are one unlabeled section.
+    func daySections(_ shown: [WorldEvent]) -> [(label: String, rows: [WorldEvent])] {
+        guard store.filter.hasPrefix("topic:") else { return [("", shown)] }
+        var sections: [(label: String, rows: [WorldEvent])] = []
+        for row in shown {
+            let label = dayLabel(row.storyFirstDate ?? row.date ?? Date())
+            if sections.last?.label == label { sections[sections.count - 1].rows.append(row) } else { sections.append((label, [row])) }
+        }
+        return sections
     }
 
     var statusText: String {

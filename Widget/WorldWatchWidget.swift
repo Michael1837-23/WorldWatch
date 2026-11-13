@@ -375,7 +375,7 @@ struct WorldLiveWidget: Widget {
 
 @main struct WorldWatchWidgets: WidgetBundle {
     init() {
-        NSLog("世界动态组件目录 2.11/34：WorldWatchNews、WorldWatchDashboard、WorldWatchMap、WorldWatchLive")
+        NSLog("世界动态组件目录 2.12/35：WorldWatchNews、WorldWatchDashboard、WorldWatchMap、WorldWatchLive")
     }
     var body: some Widget {
         WorldWatchWidget()

@@ -256,9 +256,18 @@ func isRumorHeadline(_ event: WorldEvent) -> Bool {
 
 private let softNewsPattern = try! NSRegularExpression(pattern: #"农博会|花博会|博览会|展销|巡展|作品展|文化节|艺术节|音乐节|联谊|研学|夏令营|冬令营|网友共创|共创视频|见面会|宣讲|侧记|随笔|综述|述评|社评|网评|时评|快评|锐评|评论员|新闻会客厅|学习贯彻|主题教育|党性|交流活动|座谈会|推介会|年会|周报|周刊|速览|早知道|晨报|晚报|午报|深一度|能否|会否|何去何从|意味着什么|怎么看|^[^丨｜|]{0,8}(?:观察|评论|视点|聚焦|调查|解码|读懂)[丨｜|]"#)
 
-/// Fairs, exchanges, study tours, theory pieces and commentary columns: true events, but small stuff for the followed view.
+// Analysis and features in English: listicles, explainers, two-sentence feature headlines ("… knew. Now some wonder …").
+private let featurePattern = try! NSRegularExpression(pattern: #"\b(?:names to watch|what to (?:know|watch|expect)|things to know|here'?s (?:what|why|how)|the rise and fall|what (?:we|you) know|explained|analysis|opinion|takeaways|lessons from|comes back to bite|a (?:tougher|bigger) test)\b|^\d+ (?:names|things|ways|reasons|takeaways|questions|charts|people)\b"#, options: .caseInsensitive)
+private let twoSentencePattern = try! NSRegularExpression(pattern: #"[a-z]{2,}[.!?]\s+[A-Z][a-z]"#)
+private let chineseRoundupPattern = try! NSRegularExpression(pattern: #"梳理|盘点|回顾|复盘|一文|细数|全解析|时间线"#)
+
+/// Fairs, exchanges, study tours, theory pieces, commentary columns, roundups and features:
+/// true stories, but small stuff or analysis for the followed view.
 func isSoftNews(_ event: WorldEvent) -> Bool {
-    [event.title, event.translatedTitle].compactMap { $0 }.contains { softNewsPattern.firstMatch(in: $0, range: NSRange($0.startIndex..., in: $0)) != nil }
+    if [event.title, event.translatedTitle].compactMap({ $0 }).contains(where: { softNewsPattern.firstMatch(in: $0, range: NSRange($0.startIndex..., in: $0)) != nil || chineseRoundupPattern.firstMatch(in: $0, range: NSRange($0.startIndex..., in: $0)) != nil }) { return true }
+    let title = event.title
+    let range = NSRange(title.startIndex..., in: title)
+    return !containsHan(title) && (featurePattern.firstMatch(in: title, range: range) != nil || twoSentencePattern.firstMatch(in: title, range: range) != nil)
 }
 
 func containsHan(_ text: String) -> Bool { text.unicodeScalars.contains { (0x3400...0x9fff).contains(Int($0.value)) } }
@@ -449,6 +458,46 @@ struct AlertLedger: Codable, Equatable, Sendable {
     var seeded = false
     var delivered: [Date] = []
     var byTopic: [String: [Date]] = [:]
+    /// Story key → when it first passed the big-event gate (see `promotedRows`).
+    var majorSince: [String: Date] = [:]
+    init(sent: [String: Date] = [:], seeded: Bool = false, delivered: [Date] = [], byTopic: [String: [Date]] = [:], majorSince: [String: Date] = [:]) {
+        self.sent = sent; self.seeded = seeded; self.delivered = delivered; self.byTopic = byTopic; self.majorSince = majorSince
+    }
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        sent = try c.decodeIfPresent([String: Date].self, forKey: .sent) ?? [:]
+        seeded = try c.decodeIfPresent(Bool.self, forKey: .seeded) ?? false
+        delivered = try c.decodeIfPresent([Date].self, forKey: .delivered) ?? []
+        byTopic = try c.decodeIfPresent([String: [Date]].self, forKey: .byTopic) ?? [:]
+        majorSince = try c.decodeIfPresent([String: Date].self, forKey: .majorSince) ?? [:]
+    }
+}
+
+/// The time a row is ordered and judged fresh by: when it became a big event, else its first report.
+func attentionDate(_ row: WorldEvent) -> Date { row.promotedAt ?? row.storyFirstDate ?? row.date ?? .distantPast }
+
+private let promotionSeeded = "_seeded"
+
+/// Stamps big events with the time they first passed the gate and reorders the list by it, so a story that grows
+/// into a big event hours after its first report still rises to the top. The first run stamps existing big events
+/// with their first-report time, so an upgrade does not lift them all at once. Stamps are kept for two days.
+func promotedRows(_ rows: [WorldEvent], since: [String: Date], now: Date = Date()) -> (rows: [WorldEvent], since: [String: Date]) {
+    var since = since.filter { $0.key == promotionSeeded || now.timeIntervalSince($0.value) <= 2 * 86400 }
+    let seeding = since[promotionSeeded] == nil
+    since[promotionSeeded] = now
+    let stamped = rows.map { row -> WorldEvent in
+        guard row.major == true else { return row }
+        let key = alertKey(row), first = row.storyFirstDate ?? row.date ?? now
+        if since[key] == nil { since[key] = seeding ? first : max(first, now) }
+        var copy = row
+        copy.promotedAt = since[key]
+        return copy
+    }
+    let ordered = stamped.sorted { a, b in
+        let da = attentionDate(a), db = attentionDate(b)
+        return da != db ? da > db : a.id < b.id
+    }
+    return (ordered, since)
 }
 
 let alertFreshness: TimeInterval = 3 * 3600
@@ -478,11 +527,11 @@ func alertDecision(rows: [WorldEvent], topics: [FollowTopic], settings: AlertSet
         return ([], ledger)
     }
     guard !settings.isQuiet(now, calendar: calendar) else { return ([], ledger) }
-    let fresh = candidates.filter { now.timeIntervalSince($0.storyFirstDate ?? $0.date ?? .distantPast) <= alertFreshness }.sorted { a, b in
+    let fresh = candidates.filter { now.timeIntervalSince(attentionDate($0)) <= alertFreshness }.sorted { a, b in
         if (a.major == true) != (b.major == true) { return a.major == true }
         let oa = a.storyOutlets?.count ?? 1, ob = b.storyOutlets?.count ?? 1
         if oa != ob { return oa > ob }
-        return (a.storyFirstDate ?? a.date ?? .distantPast) > (b.storyFirstDate ?? b.date ?? .distantPast)
+        return attentionDate(a) > attentionDate(b)
     }
     var send: [WorldEvent] = []
     for row in fresh {

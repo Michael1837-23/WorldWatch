@@ -196,6 +196,22 @@ func topicChecks() throws {
     let content = alertContent(follow.rows.first { $0.storyID == "f1" }!, topics: topics)
     require(content.title == "SpaceX" && content.body.hasPrefix("【据报道】") && alertContent(quake.with(major: true), topics: topics).title == "大事", "通知文字：\(content)")
 
+    // Big events are ordered by when they became big; the first run does not lift existing ones.
+    var grown = row("grow", major: true, minutesAgo: 8 * 60)
+    let fresh = row("fresh", topics: ["musk"], minutesAgo: 30)
+    let seededRun = promotedRows([fresh, grown], since: [:], now: noon)
+    require(seededRun.rows.map(\.id) == ["fresh", "grow"] && seededRun.rows[1].promotedAt == grown.storyFirstDate, "首次运行按首报时间")
+    grown.storyID = "grow2"
+    let later = promotedRows([fresh, grown], since: seededRun.since, now: noon)
+    require(later.rows.map(\.id) == ["grow", "fresh"] && later.rows[0].promotedAt == noon, "新晋大事升到最前")
+    let promotedAlert = alertDecision(rows: later.rows, topics: topics, settings: settings, ledger: AlertLedger(seeded: true), now: noon, calendar: calendar)
+    require(promotedAlert.send.first?.id == "grow", "首报 8 小时后才成为大事的仍会提醒")
+    require(try JSONDecoder().decode(AlertLedger.self, from: Data(#"{"sent":{},"seeded":true,"delivered":[],"byTopic":{}}"#.utf8)).seeded, "旧版提醒记录可读")
+    for title in ["Trump's GOP was all they knew. Now some wonder if MAGA is dead", "Jensen Huang's Leather Jacket Comes Back to Bite Him", "11 names to watch in Nvidia's CEO search"] {
+        require(isSoftNews(item("f-" + title, title, now: now)), "特写与分析：\(title)")
+    }
+    require(isSoftNews(item("f-cn", "放行对华H200芯片出口——特朗普和黄仁勋近两年交往全梳理", now: now)) && !isSoftNews(item("f-us", "U.S. Navy deploys carrier to Taiwan Strait", now: now)), "梳理稿与缩写不误判")
+
     // Topic history and topic pages.
     var old = item("old", "Older SpaceX story", publisher: "Reuters", minutesAgo: 5 * 1440, now: now); old.storyID = "old"; old.followTopics = ["spacex"]
     let ancient = item("ancient", "Ancient SpaceX story", publisher: "Reuters", minutesAgo: 15 * 1440, now: now)
@@ -241,7 +257,8 @@ func followProbe() async throws {
     let started = Date()
     print("本机索引：\(index.count) 条")
     var fetched: [WorldEvent] = []
-    for source in NewsSource.topicSources(topics) + [NewsSource.sina] {
+    let live = !CommandLine.arguments.contains("--local")
+    for source in live ? NewsSource.topicSources(topics) + [NewsSource.sina] : [] {
         do {
             var items = try await fetchSource(source)
             if source.id == NewsSource.sina.id { items = items.filter { !matcher.topicIDs($0).isEmpty && !isMarketTick($0) } }
@@ -258,6 +275,14 @@ func followProbe() async throws {
     for level in MajorLevel.allCases {
         let follow = followAnalysis(result, topics: topics, level: level, now: now)
         print("\n== 大事门槛「\(level.rawValue)」：关注 \(follow.rows.filter { $0.followTopics != nil }.count) 条，大事 \(follow.majors.count) 条（24 小时）")
+        if level == .standard && !live {
+            for row in follow.rows.prefix(45) {
+                let tag = row.major == true ? "大事" : topicLabel(row.followTopics, topics: topics) ?? ""
+                print("  \(shortTimeLabel(row.storyFirstDate ?? row.date ?? now, now: now)) [\(tag)] \(row.sourceName)·\(row.storyOutlets?.count ?? 1)家\(row.factNote.map { " " + $0 } ?? "") | \(row.displayTitle.prefix(58))")
+            }
+            let english = follow.rows.prefix(40).filter { $0.translatedTitle == nil && !containsHan($0.title) }.count
+            print("  前 40 条中仍是英文标题：\(english) 条")
+        }
         if level == .standard {
             for topic in topics {
                 let rows = follow.byTopic[topic.id] ?? []

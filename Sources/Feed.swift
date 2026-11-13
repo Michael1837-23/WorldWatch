@@ -83,6 +83,8 @@ struct WorldEvent: Identifiable, Codable, Sendable {
     var primaryOutlets: Int? = nil
     var factNote: String? = nil
     var historyOutlets: Int? = nil
+    /// When a story first passed the big-event gate; big events are ordered by it so a story that grows into one rises.
+    var promotedAt: Date? = nil
     var displayTitle: String { translatedTitle ?? title }
     var sourceName: String { publisher ?? NewsSource.find(sourceID)?.name ?? sourceID }
     var isDomestic: Bool { NewsSource.find(sourceID)?.domestic ?? false }
