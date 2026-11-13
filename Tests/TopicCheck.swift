@@ -104,7 +104,7 @@ func topicChecks() throws {
     add([item("d1", "Trump signs executive order on chip tariffs", publisher: "Reuters", minutesAgo: 20, now: now)], ["Reuters"])
     add([item("e1", "Nvidia shares fall 3% in premarket trading", publisher: "Reuters", minutesAgo: 15, now: now)], ["Reuters"])
     add([item("f1", "SpaceX and Tesla merger talks are said to progress", publisher: "Bloomberg", minutesAgo: 10, now: now)], ["Bloomberg"])
-    let outage = (0..<10).map { item("g\($0)", "Microsoft outage disrupts Outlook and Teams worldwide \($0)", publisher: "Outlet \($0)", minutesAgo: 120 - Double($0), now: now) }
+    let outage = (0..<10).map { item("g\($0)", "Microsoft outage disrupts Outlook and Teams worldwide \($0)", publisher: $0 == 0 ? "Reuters" : "Outlet \($0)", minutesAgo: 120 - Double($0), now: now) }
     add(outage, outage.map { $0.publisher! })
     add((0..<3).map { item("h\($0)", "Local council approves new budget \($0)", publisher: "Paper \($0)", minutesAgo: 60, now: now) }, ["Paper 0", "Paper 1", "Paper 2"])
     add([item("i1", "Ukraine says Russia struck Kharkiv power plant", publisher: "Kyiv Post", minutesAgo: 60 * 30, now: now),
@@ -133,9 +133,10 @@ func topicChecks() throws {
     var ticks = topics; ticks[2].showTicks = true
     require(followAnalysis(result, topics: ticks, now: now).rows.contains { $0.storyID == "e1" && $0.followTopics == ["nvidia"] }, "开启行情后显示股价跳动")
     require(followAnalysis(result, topics: topics, level: .strict, now: now).majors.isEmpty, "严格门槛下 10 家单语报道不是大事")
-    require(isMajorStory(outlets: 6, chinese: true, foreign: true, breaking: false, level: .standard) && !isMajorStory(outlets: 9, chinese: true, foreign: false, breaking: false, level: .standard), "中外都报道 6 家够，只有中文 9 家不够")
-    require(isMajorStory(outlets: 14, chinese: true, foreign: false, breaking: false, level: .standard) && isMajorStory(outlets: 4, chinese: false, foreign: true, breaking: true, level: .standard), "中文 14 家与外媒突发")
-    require(!isMajorStory(outlets: 5, chinese: true, foreign: false, breaking: true, level: .standard) && !isMajorStory(outlets: 9, chinese: false, foreign: true, breaking: true, level: .strict), "中文突发不算，严格不看突发")
+    require(isMajorStory(outlets: 6, chinese: true, foreign: true, breaking: false, primary: 1, level: .standard) && !isMajorStory(outlets: 9, chinese: true, foreign: false, breaking: false, primary: 3, level: .standard), "中外都报道 6 家够，只有中文 9 家不够")
+    require(isMajorStory(outlets: 14, chinese: true, foreign: false, breaking: false, primary: 1, level: .standard) && isMajorStory(outlets: 4, chinese: false, foreign: true, breaking: true, primary: 2, level: .standard), "中文 14 家与外媒突发")
+    require(!isMajorStory(outlets: 5, chinese: true, foreign: false, breaking: true, primary: 2, level: .standard) && !isMajorStory(outlets: 9, chinese: false, foreign: true, breaking: true, primary: 2, level: .strict), "中文突发不算，严格不看突发")
+    require(!isMajorStory(outlets: 4, chinese: false, foreign: true, breaking: true, primary: 1, level: .standard) && !isMajorStory(outlets: 20, chinese: true, foreign: true, breaking: false, primary: 0, level: .standard), "突发需两家一档；没有一档媒体不算大事")
     require(followAnalysis(result, topics: topics, level: .loose, now: now).majors.contains { $0.storyID == "i1" } == false, "宽松门槛也只看 24 小时内")
     var blocked = NewsFilter(); blocked.mode = .personal; blocked.blocked = ["Trump"]
     require(!followAnalysis(result, topics: topics, filter: blocked, now: now).rows.contains { $0.storyID == "d1" }, "屏蔽词优先")

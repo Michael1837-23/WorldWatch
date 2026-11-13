@@ -291,17 +291,19 @@ enum MajorLevel: String, CaseIterable, Codable, Sendable {
     }
     var detail: String {
         let t = thresholds
-        return "中外媒体都报道且 \(t.cross) 家以上；只有外媒 \(t.foreign) 家以上；只有中文媒体 \(t.chinese) 家以上" + (self == .strict ? "" : "；或 1 小时内 3 家相继报道的突发（4 家以上，不含只有中文媒体的）")
+        return "中外媒体都报道且 \(t.cross) 家以上；只有外媒 \(t.foreign) 家以上；只有中文媒体 \(t.chinese) 家以上" + (self == .strict ? "" : "；或 1 小时内 3 家相继报道的突发（4 家以上、其中两家一档，不含只有中文媒体的）") + "；都须至少一家通讯社、主流媒体或官方来源"
     }
 }
 
-/// The gate for events outside the followed list. Outlet counts are independent newsrooms within one story.
-func isMajorStory(outlets: Int, chinese: Bool, foreign: Bool, breaking: Bool, level: MajorLevel) -> Bool {
+/// The gate for events outside the followed list. Outlet counts are independent newsrooms within one story;
+/// at least one must be primary, and two for the breaking route (local TV sites syndicate each other within minutes).
+func isMajorStory(outlets: Int, chinese: Bool, foreign: Bool, breaking: Bool, primary: Int, level: MajorLevel) -> Bool {
+    guard primary >= 1 else { return false }
     let t = level.thresholds
     if chinese && foreign { if outlets >= t.cross { return true } }
     else if foreign { if outlets >= t.foreign { return true } }
     else if outlets >= t.chinese { return true }
-    return level != .strict && breaking && foreign && outlets >= 4
+    return level != .strict && breaking && foreign && outlets >= 4 && primary >= 2
 }
 
 func isStrongDisaster(_ event: WorldEvent) -> Bool { event.disaster && ((event.magnitude ?? 0) >= 7 || event.severity == "红色预警") }
@@ -359,7 +361,7 @@ func followAnalysis(_ result: StoryResult, topics: [FollowTopic], level: MajorLe
         let primary = Set(members.filter { outletTier($0) == .primary }.compactMap(storyOutlet))
         let chinese = members.contains { containsHan($0.title) }, foreign = members.contains { !containsHan($0.title) }
         let breaking = (story.breakingUntil ?? .distantPast) > now
-        let major = !tickOnly && age <= majorRetention && isMajorStory(outlets: story.outlets.count, chinese: chinese, foreign: foreign, breaking: breaking, level: level)
+        let major = !tickOnly && age <= majorRetention && isMajorStory(outlets: story.outlets.count, chinese: chinese, foreign: foreign, breaking: breaking, primary: primary.count, level: level)
         let topical = !topicIDs.isEmpty && (!primary.isEmpty || multi)
         guard topical || major else { continue }
         let candidates = tickOnly ? reports : news
