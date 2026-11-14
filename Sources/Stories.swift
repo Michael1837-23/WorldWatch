@@ -9,7 +9,8 @@ let storyWindow: TimeInterval = 72 * 3600
 let storyIndexLimit = 2000
 /// Followed-topic headlines (topic searches, 新浪 7×24, alias hits) have their own allowance on top of the general cap,
 /// so a busy news day cannot push them out of the 72-hour window.
-let storyIndexFollowLimit = 4000
+/// 2.15: 8000 (was 4000), so topic-search headlines for twenty-odd topics stay for the full 72 hours.
+let storyIndexFollowLimit = 8000
 let storyThreshold = 0.28
 let storyAnchorBonus = 0.10
 let storyAgePenalty = 0.10
@@ -448,6 +449,18 @@ func updatedStoryIndex(_ index: [String: StoryEntry], with events: [WorldEvent],
         } else { result[event.id] = StoryEntry(event: event, observedAt: now) }
     }
     result = result.filter { now.timeIntervalSince($0.value.event.date ?? $0.value.observedAt) <= storyWindow }
+    // One article found by several topic searches (马斯克, SpaceX and 特斯拉 all find a merger story) is kept once:
+    // same title and publisher is the same outlet, so clustering and outlet counts do not change.
+    var copies: [String: StoryEntry] = [:]
+    for entry in result.values where entry.event.sourceID.hasPrefix("topic-") {
+        let key = topicMatchText(entry.event.title) + "\u{1}" + (entry.event.publisher ?? "")
+        if let kept = copies[key] {
+            let entryTranslated = entry.event.translatedTitle != nil, keptTranslated = kept.event.translatedTitle != nil
+            let better = entryTranslated != keptTranslated ? entryTranslated : entry.event.id < kept.event.id
+            result[(better ? kept : entry).event.id] = nil
+            if better { copies[key] = entry }
+        } else { copies[key] = entry }
+    }
     guard result.count > storyIndexLimit else { return result }
     func newestFirst(_ a: StoryEntry, _ b: StoryEntry) -> Bool { (a.event.date ?? a.observedAt, a.event.id) > (b.event.date ?? b.observedAt, b.event.id) }
     let split = Dictionary(grouping: result.values) { followed($0.event) }

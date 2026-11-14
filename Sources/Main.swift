@@ -219,10 +219,11 @@ struct CachedFeed: Codable {
     func setMajorLevel(_ level: MajorLevel) { majorLevel = level; MajorLevel.selected = level; refollow() }
     func setTopicFeeds(_ on: Bool) { topicFeedsEnabled = on; UserDefaults.standard.set(on, forKey: "topicFeeds"); scheduleStories(delay: 0) }
     func setSina(_ on: Bool) { sinaEnabled = on; UserDefaults.standard.set(on, forKey: "sinaFlashes"); scheduleStories(delay: 0) }
-    /// 新浪 every round; each topic search at most every 12 minutes (20 with more than ten topics), four per round.
+    /// 新浪 every round; each topic search at most every 12 minutes (20 with more than ten topics, 30 with more than
+    /// twenty), four per round.
     private func dueExtraSources(now: Date = Date()) -> [NewsSource] {
         var due: [NewsSource] = sinaEnabled ? [.sina] : []
-        let interval: TimeInterval = topics.count > 10 ? 1200 : 720
+        let interval: TimeInterval = topics.count > 20 ? 1800 : topics.count > 10 ? 1200 : 720
         let waiting = topicSources.filter { now.timeIntervalSince(extraAttempt[$0.id] ?? .distantPast) >= interval }
             .sorted { (extraAttempt[$0.id] ?? .distantPast) < (extraAttempt[$1.id] ?? .distantPast) }
         due += waiting.prefix(4)

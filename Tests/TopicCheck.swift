@@ -68,7 +68,19 @@ func topicChecks() throws {
     let v213 = FollowTopic.adding(["openai", "apple"], to: saved)
     var batched = v213
     for batch in newPresetBatches { batched = FollowTopic.adding(batch.ids, to: batched) }
-    require(batched.map(\.id) == v213.map(\.id) + ["mideast", "anthropic", "tesla", "tsmc"] && batched.count == FollowTopic.presets.count, "2.13 的清单补上 2.14 的四个对象")
+    require(batched.map(\.id) == v213.map(\.id) + ["mideast", "anthropic", "tesla", "tsmc", "shenzhen", "chongqing", "nike", "adidas", "gem", "jaychou", "chenze", "toefl", "saudi", "europe"]
+            && batched.count == FollowTopic.presets.count && FollowTopic.presets.count <= FollowTopic.limit, "2.13 的清单补上 2.14、2.15 的对象")
+    // 2.15 presets.
+    require(ids("深圳APEC峰会下周举行") .contains("shenzhen") && ids("Chongqing opens new rail link") == ["chongqing"], "深圳与重庆")
+    require(ids("耐克第三季度营收下滑") == ["nike"] && ids("Adidas raises full-year outlook") == ["adidas"], "耐克与阿迪达斯")
+    require(ids("鄧紫棋宣布世界巡演新站") == ["gem"] && ids("周董新专辑定档") == ["jaychou"] && ids("Jay Chou announces concert") == ["jaychou"], "邓紫棋与周杰伦")
+    require(ids("陈泽直播间人气创新高") == ["chenze"], "陈泽")
+    require(isSoftNews(item("sn1", "Nike Air Force 1 Low Atomic Violet Releases November 20", now: now)) && isSoftNews(item("sn2", "adidas Samba gets a new colorway", now: now))
+            && !isSoftNews(item("sn3", "Nike cuts 2,000 jobs as sales slump", now: now)) && outletTier(publisher: "Sneaker News", sourceID: "topic-nike-en") == .low, "球鞋发售稿与博客")
+    require(ids("托福考试将推出新版题型") == ["toefl"] && ids("ETS：托福成绩有效期调整") == ["toefl"] && ids("TOEFL scores now accepted by more universities") == ["toefl"], "托福")
+    require(!ids("托您的福，项目顺利完工").contains("toefl") && !ids("托福大家，比赛赢了").contains("toefl"), "「托您的福」不算托福")
+    require(ids("沙特与阿联酋同时致电特朗普").contains("saudi") && ids("Saudi Arabia raises oil output") .contains("saudi"), "沙特")
+    require(ids("欧盟将参与乌克兰和谈").contains("europe") && ids("EU fines Apple over App Store rules").contains("europe") && !ids("Eugene Levy stars in new show").contains("europe"), "欧洲与 EU 大写")
     require(Set(newPresetBatches.flatMap(\.ids)).isSubset(of: Set(FollowTopic.presets.map(\.id))), "迁移的对象都在预置里")
     let full = (0..<FollowTopic.limit).map { FollowTopic(id: "t\($0)", name: "对象\($0)", aliases: ["对象\($0)"]) }
     require(FollowTopic.adding(["openai"], to: full).count == FollowTopic.limit, "满 20 个不再添加")
@@ -321,8 +333,14 @@ func topicChecks() throws {
     index = updatedStoryIndex(index, with: [translatedEntry], now: now, followed: isFollowed)
     index = updatedStoryIndex(index, with: [item("fol1", "Followed 1", source: "topic-musk-en", minutesAgo: 3001, now: now)], now: now, followed: isFollowed)
     require(index["fol1"]?.event.translatedTitle == "关注 1", "重复抓到未翻译标题时保留译文")
+    var copies: [String: StoryEntry] = [:]
+    let copyA = item("topic-musk-en:x", "SpaceX and Tesla merger talks progress", publisher: "Bloomberg", source: "topic-musk-en", minutesAgo: 30, now: now)
+    var copyB = item("topic-spacex-en:x", "SpaceX and Tesla merger talks progress", publisher: "Bloomberg", source: "topic-spacex-en", minutesAgo: 30, now: now); copyB.translatedTitle = "SpaceX 与特斯拉合并谈判取得进展"
+    let otherOutlet = item("topic-tesla-en:y", "SpaceX and Tesla merger talks progress", publisher: "Reuters", source: "topic-tesla-en", minutesAgo: 30, now: now)
+    copies = updatedStoryIndex(copies, with: [copyA, copyB, otherOutlet], now: now, followed: isFollowed)
+    require(copies.count == 2 && copies["topic-spacex-en:x"] != nil && copies["topic-tesla-en:y"] != nil, "几个对象搜到同一篇报道只留一条，优先有译文的；其他媒体的同名报道保留")
 
-    print("PASS: 关注对象匹配（别名、大写缩写、共现、繁简、北京时间）、自定义搜索词、搜索源与新浪来源、媒体分档、行情与传闻、软新闻、新浪解析、关注列表入选与排序、大事门槛、屏蔽词、组件退回、大事排序、同一事件合并、对象历史与对象页、事件页分栏、关注名额")
+    print("PASS: 关注对象匹配（别名、大写缩写、共现、繁简、北京时间）、自定义搜索词、搜索源与新浪来源、媒体分档、行情与传闻、软新闻、新浪解析、关注列表入选与排序、大事门槛、屏蔽词、组件退回、大事排序、同一事件合并、对象历史与对象页、事件页分栏、关注名额与重复收录")
 }
 
 private extension WorldEvent {

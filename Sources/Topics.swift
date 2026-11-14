@@ -87,9 +87,23 @@ struct FollowTopic: Codable, Identifiable, Equatable, Hashable, Sendable {
                     queryZH: "苹果公司 OR iPhone OR 库克", queryEN: "Apple OR iPhone OR \"Tim Cook\""),
         // Robotaxi is left out: Waymo, Baidu and Pony.ai run robotaxis too.
         FollowTopic(id: "tesla", name: "特斯拉", aliases: ["特斯拉", "Tesla", "Cybertruck", "Cybercab"], queryZH: "特斯拉", queryEN: "Tesla"),
-        FollowTopic(id: "tsmc", name: "台积电", aliases: ["台积电", "TSMC", "魏哲家", "C.C. Wei"], queryZH: "台积电", queryEN: "TSMC")
+        FollowTopic(id: "tsmc", name: "台积电", aliases: ["台积电", "TSMC", "魏哲家", "C.C. Wei"], queryZH: "台积电", queryEN: "TSMC"),
+        // 2.15: places, brands, people and an exam the user named.
+        FollowTopic(id: "shenzhen", name: "深圳", aliases: ["深圳", "Shenzhen"], queryZH: "深圳", queryEN: "Shenzhen"),
+        FollowTopic(id: "chongqing", name: "重庆", aliases: ["重庆", "Chongqing"], queryZH: "重庆", queryEN: "Chongqing"),
+        FollowTopic(id: "nike", name: "耐克", aliases: ["耐克", "Nike"], queryZH: "耐克", queryEN: "Nike"),
+        FollowTopic(id: "adidas", name: "阿迪达斯", aliases: ["阿迪达斯", "Adidas"], queryZH: "阿迪达斯", queryEN: "Adidas"),
+        FollowTopic(id: "gem", name: "邓紫棋", aliases: ["邓紫棋", "G.E.M.", "Gloria Tang"], queryZH: "邓紫棋", queryEN: "\"Gloria Tang\""),
+        FollowTopic(id: "jaychou", name: "周杰伦", aliases: ["周杰伦", "周董", "Jay Chou"], queryZH: "周杰伦", queryEN: "\"Jay Chou\""),
+        FollowTopic(id: "chenze", name: "陈泽", aliases: ["陈泽"], queryZH: "陈泽", queryEN: "陈泽"),
+        // 托福 is also 「托您的福」, so alone it needs exam context.
+        FollowTopic(id: "toefl", name: "托福", aliases: ["TOEFL", "托福考试", "托福成绩"],
+                    pairs: [["托福"], ["考试", "考生", "成绩", "分数", "ETS", "留学", "雅思", "改革", "新版", "家考", "报名", "机考"]],
+                    queryZH: "托福 考试", queryEN: "TOEFL"),
+        FollowTopic(id: "saudi", name: "沙特", aliases: ["沙特", "沙乌地", "利雅得", "Saudi", "Riyadh", "Mohammed bin Salman"], queryZH: "沙特", queryEN: "Saudi"),
+        FollowTopic(id: "europe", name: "欧洲", aliases: ["欧洲", "欧盟", "Europe", "European", "EU", "European Union"], queryZH: "欧洲 OR 欧盟", queryEN: "Europe OR \"European Union\"")
     ]
-    static let limit = 20
+    static let limit = 30
 
     /// Presets added after a list was saved, appended once unless the list already covers them (same id, or a name or alias in common).
     static func adding(_ ids: [String], to list: [FollowTopic]) -> [FollowTopic] {
@@ -112,7 +126,8 @@ struct FollowTopic: Codable, Identifiable, Equatable, Hashable, Sendable {
 }
 
 /// Presets that arrived after lists were saved, each batch with the flag that marks a saved list as extended.
-let newPresetBatches: [(flag: String, ids: [String])] = [("topicsV213", ["openai", "apple"]), ("topicsV214", ["mideast", "anthropic", "tesla", "tsmc"])]
+let newPresetBatches: [(flag: String, ids: [String])] = [("topicsV213", ["openai", "apple"]), ("topicsV214", ["mideast", "anthropic", "tesla", "tsmc"]),
+                                                          ("topicsV215", ["shenzhen", "chongqing", "nike", "adidas", "gem", "jaychou", "chenze", "toefl", "saudi", "europe"])]
 
 /// Text form used for matching: traditional folded to simplified, lower-cased; "北京时间" is a clock, not Beijing.
 func topicMatchText(_ text: String) -> String {
@@ -275,7 +290,9 @@ private let lowOutletNames = [
     // Gadget tips, deals and fan blogs: real Apple or Nvidia news also reaches the wires, these add how-tos and rumors.
     "9to5mac", "9to5google", "appleinsider", "macrumors", "imore", "cult of mac", "applemagazine", "apple world today", "macdailynews", "idropnews",
     "lifehacker", "man of many", "bgr", "tom's guide", "tom’s guide", "phonearena", "gsmarena", "wccftech", "notebookcheck", "android authority",
-    "android central", "slashgear", "pocket-lint", "tvline", "decider", "biggo", "fxleaders"
+    "android central", "slashgear", "pocket-lint", "tvline", "decider", "biggo", "fxleaders",
+    // 2.15: sneaker-release blogs (耐克、阿迪达斯 searches)
+    "sneaker news", "sneaker bar", "modern notoriety", "dscene", "hypebeast", "kicksonfire", "sole collector", "nice kicks", "sneaker freaker", "sneakerfiles", "house of heat", "sole retriever", "kicksundercost"
 ]
 
 func outletTier(publisher: String?, sourceID: String) -> OutletTier {
@@ -308,7 +325,7 @@ func isRumorHeadline(_ event: WorldEvent) -> Bool {
 private let softNewsPattern = try! NSRegularExpression(pattern: #"农博会|花博会|博览会|展销|巡展|作品展|文化节|艺术节|音乐节|联谊|研学|夏令营|冬令营|网友共创|共创视频|见面会|宣讲|侧记|随笔|综述|述评|社评|网评|时评|快评|锐评|评论员|新闻会客厅|学习贯彻|主题教育|党性|交流活动|座谈会|推介会|年会|周报|周刊|速览|早知道|晨报|晚报|午报|深一度|横评|评测|测评|上手|开箱|怎么选|如何选|选购|攻略|教程|小技巧|好物|种草|测试版|以旧换新|划不划算|值不值得?|配置推荐|分析[:：]|影响分析|深度分析|解读|能否|会否|何去何从|意味着什么|怎么看|^[^丨｜|]{0,8}(?:观察|评论|视点|聚焦|调查|解码|读懂)[丨｜|]"#)
 
 // Analysis and features in English: listicles, explainers, two-sentence feature headlines ("… knew. Now some wonder …").
-private let featurePattern = try! NSRegularExpression(pattern: #"\b(?:names to watch|what to (?:know|watch|expect)|things to know|here'?s (?:what|why|how|the fix)|the rise and fall|what (?:we|you) know|explained|analysis|opinion|takeaways|lessons from|comes back to bite|a (?:tougher|bigger) test|tips (?:and|&) tricks|hands-on|first look|unboxing|buying guide|stream it or skip it|recap|premiere|trailer|should know|gift guide|gift ideas|holiday gift|gift to beat|black friday|cyber monday|prime day|beta)\b|\bhas an? [\w' -]{1,30} problem\b|^how to\b|\b(?:ios|ipados|macos|tvos|watchos|visionos) \d+\.\d+|^\d+ (?:names|things|ways|reasons|takeaways|questions|charts|people|tips|tricks|features|apps|deals)\b"#, options: .caseInsensitive)
+private let featurePattern = try! NSRegularExpression(pattern: #"\b(?:names to watch|what to (?:know|watch|expect)|things to know|here'?s (?:what|why|how|the fix)|the rise and fall|what (?:we|you) know|explained|analysis|opinion|takeaways|lessons from|comes back to bite|a (?:tougher|bigger) test|tips (?:and|&) tricks|hands-on|first look|unboxing|buying guide|stream it or skip it|recap|premiere|trailer|should know|gift guide|gift ideas|holiday gift|gift to beat|black friday|cyber monday|prime day|beta)\b|\bhas an? [\w' -]{1,30} problem\b|^how to\b|\b(?:ios|ipados|macos|tvos|watchos|visionos) \d+\.\d+|^\d+ (?:names|things|ways|reasons|takeaways|questions|charts|people|tips|tricks|features|apps|deals)\b|\b(?:colorways?|release date|restocks?)\b|\breleases? (?:on )?(?:january|february|march|april|may|june|july|august|september|october|november|december|this|next|tomorrow|today)\b"#, options: .caseInsensitive)
 private let twoSentencePattern = try! NSRegularExpression(pattern: #"[a-z]{2,}[.!?]\s+[A-Z][a-z]"#)
 // Roundups and newsletters ("A; B; C"), seminars and "交出答卷" style pieces.
 private let chineseRoundupPattern = try! NSRegularExpression(pattern: #"梳理|盘点|回顾|复盘|一文|细数|全解析|时间线|研讨会|交流会|恳谈会|答卷|[;；][^;；]+[;；]"#)
