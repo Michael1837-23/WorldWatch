@@ -1,7 +1,8 @@
 import Foundation
 
-// 关注追踪（2.10–2.12）: followed topics, outlet tiers, fact labels, the big-event gate, alerts and topic history.
+// 关注追踪（2.10–2.14）: followed topics, outlet tiers, fact labels, the big-event gate, big-event ordering and topic history.
 // Pure functions shared by the app, the widgets and Tests/TopicCheck.swift. Plan and measurements: docs/路线图.md.
+// The 2.11 notifications were removed in 2.14 at the user's request; the app no longer asks for notification permission.
 
 // MARK: - Topics
 
@@ -19,11 +20,10 @@ struct FollowTopic: Codable, Identifiable, Equatable, Hashable, Sendable {
     var queryEN: String = ""
     /// Index and share-price moves are hidden unless asked for.
     var showTicks = false
-    var alerts = true
 
-    init(id: String, name: String, aliases: [String], pairs: [[String]] = [], excludes: [String] = [], queryZH: String = "", queryEN: String = "", showTicks: Bool = false, alerts: Bool = true) {
+    init(id: String, name: String, aliases: [String], pairs: [[String]] = [], excludes: [String] = [], queryZH: String = "", queryEN: String = "", showTicks: Bool = false) {
         self.id = id; self.name = name; self.aliases = aliases; self.pairs = pairs; self.excludes = excludes
-        self.queryZH = queryZH; self.queryEN = queryEN; self.showTicks = showTicks; self.alerts = alerts
+        self.queryZH = queryZH; self.queryEN = queryEN; self.showTicks = showTicks
         if self.queryZH.isEmpty || self.queryEN.isEmpty { fillQueries() }
     }
     init(from decoder: Decoder) throws {
@@ -36,7 +36,6 @@ struct FollowTopic: Codable, Identifiable, Equatable, Hashable, Sendable {
         queryZH = try c.decodeIfPresent(String.self, forKey: .queryZH) ?? ""
         queryEN = try c.decodeIfPresent(String.self, forKey: .queryEN) ?? ""
         showTicks = try c.decodeIfPresent(Bool.self, forKey: .showTicks) ?? false
-        alerts = try c.decodeIfPresent(Bool.self, forKey: .alerts) ?? true
         if queryZH.isEmpty || queryEN.isEmpty { fillQueries() }
     }
 
@@ -66,16 +65,29 @@ struct FollowTopic: Codable, Identifiable, Equatable, Hashable, Sendable {
         FollowTopic(id: "taiwan", name: "台海两岸", aliases: ["两岸", "台海", "台湾海峡", "国台办", "赖清德", "台独", "Taiwan Strait", "cross-strait", "Lai Ching-te"],
                     pairs: [["台湾", "Taiwan", "Taiwanese"], ["大陆", "解放军", "北京", "中国", "中共", "PLA", "Beijing", "China", "Chinese"]],
                     queryZH: "台海 OR 两岸 OR 国台办", queryEN: "Taiwan China OR \"Taiwan Strait\""),
+        // 2.14. 以军 is left out: it is also part of 可以军事、以军事手段.
+        FollowTopic(id: "mideast", name: "中东局势", aliases: ["以色列", "伊朗", "加沙", "哈马斯", "真主党", "胡塞", "内塔尼亚胡", "哈梅内伊", "德黑兰", "霍尔木兹",
+                                                       "黎巴嫩", "叙利亚", "也门", "约旦河西岸", "巴勒斯坦",
+                                                       "Israel", "Israeli", "Iran", "Iranian", "Gaza", "Hamas", "Hezbollah", "Houthi", "Houthis", "Netanyahu", "Khamenei",
+                                                       "Tehran", "IDF", "Hormuz", "Lebanon", "Lebanese", "Syria", "Syrian", "Yemen", "West Bank", "Palestinian", "Palestinians"],
+                    queryZH: "伊朗 OR 以色列 OR 加沙 OR 黎巴嫩", queryEN: "Iran OR Israel OR Gaza OR Lebanon"),
         // 奥特曼 alone is also Ultraman, so it needs company context.
         FollowTopic(id: "openai", name: "OpenAI", aliases: ["OpenAI", "ChatGPT", "Sam Altman", "Altman", "奥尔特曼", "阿尔特曼"],
                     pairs: [["奥特曼"], ["山姆", "萨姆", "CEO", "首席执行官", "GPT", "AGI", "大模型", "微软", "马斯克", "估值", "融资", "IPO"]],
                     queryZH: "OpenAI OR ChatGPT", queryEN: "OpenAI OR \"Sam Altman\""),
+        // Claude is also a first name (Claude Monet), so alone it needs AI context.
+        FollowTopic(id: "anthropic", name: "Anthropic", aliases: ["Anthropic", "Dario Amodei", "Amodei", "阿莫代"],
+                    pairs: [["Claude"], ["AI", "人工智能", "大模型", "模型", "聊天机器人", "chatbot", "Opus", "Sonnet", "编程", "coding", "智能体", "agent", "agents"]],
+                    queryZH: "Anthropic OR Claude", queryEN: "Anthropic OR \"Dario Amodei\""),
         // Bare 苹果 is also the fruit and 库克 also the Cook Islands: either needs the other or a company word.
         FollowTopic(id: "apple", name: "苹果", aliases: ["苹果公司", "苹果手机", "Apple", "iPhone", "iPad", "MacBook", "Vision Pro", "App Store", "Tim Cook", "蒂姆·库克"],
                     pairs: [["苹果"], ["库克", "iPhone", "iPad", "Mac", "iOS", "Siri", "CEO", "首席执行官", "AI", "芯片", "手机", "折叠屏", "应用商店", "市值", "股价", "美股",
                                        "财报", "营收", "发布会", "欧盟", "反垄断", "罚款", "关税", "供应链", "富士康", "特朗普", "微软", "谷歌", "英伟达", "三星", "华为"]],
                     excludes: ["苹果日报", "Apple Daily", "Big Apple", "Apple TV", "Apple Music"],
-                    queryZH: "苹果公司 OR iPhone OR 库克", queryEN: "Apple OR iPhone OR \"Tim Cook\"")
+                    queryZH: "苹果公司 OR iPhone OR 库克", queryEN: "Apple OR iPhone OR \"Tim Cook\""),
+        // Robotaxi is left out: Waymo, Baidu and Pony.ai run robotaxis too.
+        FollowTopic(id: "tesla", name: "特斯拉", aliases: ["特斯拉", "Tesla", "Cybertruck", "Cybercab"], queryZH: "特斯拉", queryEN: "Tesla"),
+        FollowTopic(id: "tsmc", name: "台积电", aliases: ["台积电", "TSMC", "魏哲家", "C.C. Wei"], queryZH: "台积电", queryEN: "TSMC")
     ]
     static let limit = 20
 
@@ -98,6 +110,9 @@ struct FollowTopic: Codable, Identifiable, Equatable, Hashable, Sendable {
         set { if let data = try? JSONEncoder().encode(Array(newValue.prefix(limit))) { WorldPreferences.shared.set(data, forKey: "followTopics") } }
     }
 }
+
+/// Presets that arrived after lists were saved, each batch with the flag that marks a saved list as extended.
+let newPresetBatches: [(flag: String, ids: [String])] = [("topicsV213", ["openai", "apple"]), ("topicsV214", ["mideast", "anthropic", "tesla", "tsmc"])]
 
 /// Text form used for matching: traditional folded to simplified, lower-cased; "北京时间" is a clock, not Beijing.
 func topicMatchText(_ text: String) -> String {
@@ -364,7 +379,7 @@ let majorRetention: TimeInterval = 24 * 3600
 /// - Other stories appear only when they pass the big-event gate within 24 hours.
 /// - The display headline prefers a primary outlet, then the cluster lead, then a Chinese title, then the first report.
 func followAnalysis(_ result: StoryResult, topics: [FollowTopic], level: MajorLevel = .standard, disasters: [WorldEvent] = [],
-                    filter: NewsFilter = NewsFilter(), now: Date = Date()) -> FollowAnalysis {
+                    filter: NewsFilter = NewsFilter(), now: Date = Date(), joinRows: Bool = true) -> FollowAnalysis {
     let matcher = TopicMatcher(topics)
     let topicByID = Dictionary(uniqueKeysWithValues: topics.map { ($0.id, $0) })
     var rows: [WorldEvent] = []
@@ -429,6 +444,7 @@ func followAnalysis(_ result: StoryResult, topics: [FollowTopic], level: MajorLe
         if filter.mode == .personal, newsFilterBlocks(row, filter: filter) { continue }
         rows.append(row)
     }
+    if joinRows { rows = threadedRows(rows, result: result, topics: topics, level: level, now: now) }
     for event in disasters where isStrongDisaster(event) {
         guard let date = event.date, now.timeIntervalSince(date) <= majorRetention, now.timeIntervalSince(date) >= -3600 else { continue }
         var row = event
@@ -443,6 +459,137 @@ func followAnalysis(_ result: StoryResult, topics: [FollowTopic], level: MajorLe
     var byTopic: [String: [WorldEvent]] = [:]
     for row in rows { for id in row.followTopics ?? [] { byTopic[id, default: []].append(row) } }
     return FollowAnalysis(rows: rows, byTopic: byTopic)
+}
+
+// MARK: - One row per event (2.14)
+
+/// Clustering keeps a launch's preview, the launch and its outcome apart, and Chinese and foreign wording apart: on
+/// 2026-11-14 the Starship flight filled about 40 rows. Rows join when they share a followed topic and their stories'
+/// wording is close — the cosine of IDF-weighted story centroids, with the topics' own names and context words left
+/// out — at 0.30 within a day, or at 0.18 within six hours for a story from one or two outlets. Rows without a topic
+/// (big events) join at 0.30 only. Measurements: docs/acceptance/升级验收记录-2.14.md.
+let threadThreshold = 0.30
+let threadSmallThreshold = 0.18
+let threadWindow: TimeInterval = 24 * 3600
+let threadSmallWindow: TimeInterval = 6 * 3600
+
+/// Words a topic is recognised by, as story terms: every row of the topic shares them, so they say nothing about which event.
+private func topicTerms(_ topic: FollowTopic) -> Set<String> {
+    var terms = Set<String>()
+    for word in [topic.name] + topic.aliases + topic.pairs.flatMap({ $0 }) {
+        terms.formUnion(storyBigrams(topicMatchText(word)).map { "z" + $0 })
+        terms.formUnion(storyWords(word).map { "e" + $0 })
+    }
+    return terms
+}
+
+/// Joins rows about the same event (see `threadThreshold`). Deterministic; disasters pass through unchanged.
+func threadedRows(_ rows: [WorldEvent], result: StoryResult, topics: [FollowTopic], level: MajorLevel = .standard, now: Date = Date()) -> [WorldEvent] {
+    guard rows.count > 1 else { return rows }
+    // Terms come from clustering; a hand-built result (tests) falls back to the same features without name tagging.
+    func fallbackTerms(_ event: WorldEvent) -> Set<String> {
+        var f = StoryFeatures()
+        let chinese = event.translatedTitle ?? (isChineseSource(event.sourceID) ? event.title : nil)
+        f.grams = storyBigrams(stripStoryBoilerplate(chinese ?? event.title))
+        if !isChineseSource(event.sourceID) { f.words = storyWords(stripStoryBoilerplate(event.title)) }
+        return storyTerms(f)
+    }
+    var termsOf = result.terms
+    var df: [String: Int] = [:]
+    var count = 0
+    for event in result.events.values where !event.disaster {
+        if termsOf[event.id] == nil { termsOf[event.id] = fallbackTerms(event) }
+        for term in termsOf[event.id]! { df[term, default: 0] += 1 }
+        count += 1
+    }
+    let n = Double(max(count, 1))
+    let removed = Dictionary(uniqueKeysWithValues: topics.map { ($0.id, topicTerms($0)) })
+    let storyByID = Dictionary(result.stories.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+    func stories(_ row: WorldEvent) -> [NewsStory] {
+        ([row.storyID].compactMap { $0 } + (row.threadStoryIDs ?? [])).compactMap { storyByID[$0] ?? result.story(for: $0) }
+    }
+    func vector(_ row: WorldEvent) -> [String: Double] {
+        let drop = (row.followTopics ?? []).reduce(into: Set<String>()) { $0.formUnion(removed[$1] ?? []) }
+        let members = stories(row).flatMap(\.memberIDs).compactMap { result.events[$0] }.filter { !$0.disaster }
+        var v: [String: Double] = [:]
+        for member in members.isEmpty ? [row] : members {
+            let kept = (termsOf[member.id] ?? fallbackTerms(member)).subtracting(drop).sorted()
+            let weights = kept.map { log(n / Double(max(df[$0] ?? 1, 1))) }
+            let norm = sqrt(weights.reduce(0) { $0 + $1 * $1 })
+            guard norm > 0 else { continue }
+            for (term, weight) in zip(kept, weights) { v[term, default: 0] += weight / norm }
+        }
+        return v
+    }
+    func outlets(_ row: WorldEvent) -> Int { row.storyOutlets?.count ?? 1 }
+    func first(_ row: WorldEvent) -> Date { row.storyFirstDate ?? row.date ?? now }
+    struct Thread { var rows: [Int]; var centroid: [String: Double]; var normSq: Double; var topics: Set<String>; var firsts: [Date] }
+    // Widest stories first, so each event is seeded by its best-covered story.
+    let order = rows.indices.filter { !rows[$0].disaster }.sorted { a, b in
+        if outlets(rows[a]) != outlets(rows[b]) { return outlets(rows[a]) > outlets(rows[b]) }
+        return first(rows[a]) != first(rows[b]) ? first(rows[a]) < first(rows[b]) : rows[a].id < rows[b].id
+    }
+    var threads: [Thread] = []
+    for i in order {
+        let row = rows[i], v = vector(row), keys = v.keys.sorted()
+        let selfSq = keys.reduce(0) { $0 + v[$1]! * v[$1]! }
+        let rowTopics = Set(row.followTopics ?? [])
+        var best = -1, bestScore = 0.0, bestDot = 0.0
+        for (t, thread) in threads.enumerated() where selfSq > 0 && thread.normSq > 0 {
+            let topical = !rowTopics.isEmpty && !thread.topics.isEmpty
+            if topical && rowTopics.isDisjoint(with: thread.topics) { continue }
+            let gap = thread.firsts.map { abs($0.timeIntervalSince(first(row))) }.min() ?? .infinity
+            guard gap <= threadWindow else { continue }
+            var dot = 0.0
+            for k in keys { if let y = thread.centroid[k] { dot += v[k]! * y } }
+            let score = dot / sqrt(thread.normSq * selfSq)
+            let joins = score >= threadThreshold || (topical && outlets(row) <= 2 && gap <= threadSmallWindow && score >= threadSmallThreshold)
+            if joins && score > bestScore { best = t; bestScore = score; bestDot = dot }
+        }
+        if best < 0 {
+            threads.append(Thread(rows: [i], centroid: v, normSq: selfSq, topics: rowTopics, firsts: [first(row)]))
+            continue
+        }
+        threads[best].rows.append(i)
+        threads[best].normSq += 2 * bestDot + selfSq
+        for k in keys { threads[best].centroid[k, default: 0] += v[k]! }
+        threads[best].topics.formUnion(rowTopics)
+        threads[best].firsts.append(first(row))
+    }
+    let topicOrder = topics.map(\.id)
+    var output = rows.filter(\.disaster)
+    for thread in threads {
+        let group = thread.rows.map { rows[$0] }
+        guard group.count > 1 else { output.append(group[0]); continue }
+        // Shown: the latest development that a third of the widest story's outlets (and at least three) covered,
+        // so a launch's outcome replaces its preview; the key stays the widest story's.
+        let widest = group[0]
+        let wide = group.filter { outlets($0) >= max(3, outlets(widest) / 3) }
+        let shown = (wide.isEmpty ? [widest] : wide).max { (first($0), $1.id) < (first($1), $0.id) }!
+        var row = shown
+        let storyList = group.flatMap(stories)
+        var seen = Set<String>(), names: [String] = []
+        for story in storyList { for name in story.outlets where seen.insert(name).inserted { names.append(name) } }
+        let members = storyList.flatMap(\.memberIDs).compactMap { result.events[$0] }.filter { !$0.disaster }
+        let primary = Set(members.filter { outletTier($0) == .primary }.compactMap(storyOutlet))
+        row.storyID = widest.storyID
+        row.threadStoryIDs = group.dropFirst().compactMap(\.storyID) + group.flatMap { $0.threadStoryIDs ?? [] }
+        row.storyOutlets = names.count >= 2 ? names : shown.storyOutlets
+        row.storyHeat = group.compactMap(\.storyHeat).max()
+        row.storyLead = true
+        row.breakingUntil = group.compactMap(\.breakingUntil).max()
+        let union = Set(group.flatMap { $0.followTopics ?? [] })
+        row.followTopics = union.isEmpty ? nil : topicOrder.filter(union.contains)
+        row.primaryOutlets = max(primary.count, group.compactMap(\.primaryOutlets).max() ?? 0)
+        row.factNote = isRumorHeadline(shown) && (row.primaryOutlets ?? 0) < 2 ? "据报道" : nil
+        // Counted together the event may pass the big-event gate that no single story passed.
+        let chinese = members.contains { containsHan($0.title) }, foreign = members.contains { !containsHan($0.title) }
+        let gate = !group.allSatisfy(isMarketTick) && now.timeIntervalSince(first(shown)) <= majorRetention
+            && isMajorStory(outlets: names.count, chinese: chinese, foreign: foreign, breaking: (row.breakingUntil ?? .distantPast) > now, primary: primary.count, level: level)
+        row.major = group.contains { $0.major == true } || gate ? true : nil
+        output.append(row)
+    }
+    return output
 }
 
 /// Widget fallback when the app has not published a followed list for two hours: keyword matching over the
@@ -470,50 +617,14 @@ func followedPool(_ snapshot: NewsSnapshot, now: Date = Date(), topics: [FollowT
     return followedFallback(all, topics: topics, now: now)
 }
 
-// MARK: - Alerts (2.11)
+// MARK: - Big-event ordering (2.11)
 
-struct AlertSettings: Codable, Equatable, Sendable {
-    var major = true
-    var topics = true
-    var quiet = true
-    var quietStart = 23
-    var quietEnd = 7
-    static var selected: AlertSettings {
-        get {
-            guard let data = WorldPreferences.shared.data(forKey: "alertSettings"), let value = try? JSONDecoder().decode(AlertSettings.self, from: data) else { return AlertSettings() }
-            return value
-        }
-        set { if let data = try? JSONEncoder().encode(newValue) { WorldPreferences.shared.set(data, forKey: "alertSettings") } }
-    }
-    func isQuiet(_ date: Date, calendar: Calendar = .current) -> Bool {
-        guard quiet, quietStart != quietEnd else { return false }
-        let hour = calendar.component(.hour, from: date)
-        return quietStart < quietEnd ? (hour >= quietStart && hour < quietEnd) : (hour >= quietStart || hour < quietEnd)
-    }
-}
+/// The key a followed row is remembered by: its story id, else the headline id.
+func storyKey(_ row: WorldEvent) -> String { row.storyID ?? row.id }
 
-struct AlertLedger: Codable, Equatable, Sendable {
-    var sent: [String: Date] = [:]
-    var seeded = false
-    var delivered: [Date] = []
-    var byTopic: [String: [Date]] = [:]
-    /// Story key → when it first passed the big-event gate (see `promotedRows`).
-    var majorSince: [String: Date] = [:]
-    init(sent: [String: Date] = [:], seeded: Bool = false, delivered: [Date] = [], byTopic: [String: [Date]] = [:], majorSince: [String: Date] = [:]) {
-        self.sent = sent; self.seeded = seeded; self.delivered = delivered; self.byTopic = byTopic; self.majorSince = majorSince
-    }
-    init(from decoder: Decoder) throws {
-        let c = try decoder.container(keyedBy: CodingKeys.self)
-        sent = try c.decodeIfPresent([String: Date].self, forKey: .sent) ?? [:]
-        seeded = try c.decodeIfPresent(Bool.self, forKey: .seeded) ?? false
-        delivered = try c.decodeIfPresent([Date].self, forKey: .delivered) ?? []
-        byTopic = try c.decodeIfPresent([String: [Date]].self, forKey: .byTopic) ?? [:]
-        majorSince = try c.decodeIfPresent([String: Date].self, forKey: .majorSince) ?? [:]
-    }
-}
-
-/// The time a row is ordered and judged fresh by: when it became a big event, else its first report.
-func attentionDate(_ row: WorldEvent) -> Date { row.promotedAt ?? row.storyFirstDate ?? row.date ?? .distantPast }
+/// The time a row is ordered by: when it became a big event or the first report of what it shows, whichever is later
+/// (a joined row shows its latest development).
+func attentionDate(_ row: WorldEvent) -> Date { max(row.promotedAt ?? .distantPast, row.storyFirstDate ?? row.date ?? .distantPast) }
 
 private let promotionSeeded = "_seeded"
 
@@ -526,8 +637,9 @@ func promotedRows(_ rows: [WorldEvent], since: [String: Date], now: Date = Date(
     since[promotionSeeded] = now
     let stamped = rows.map { row -> WorldEvent in
         guard row.major == true else { return row }
-        let key = alertKey(row), first = row.storyFirstDate ?? row.date ?? now
-        if since[key] == nil { since[key] = seeding ? first : max(first, now) }
+        let key = storyKey(row), first = row.storyFirstDate ?? row.date ?? now
+        // A joined row keeps the stamp of any story folded into it, so a change of key does not lift it again.
+        if since[key] == nil { since[key] = (row.threadStoryIDs ?? []).compactMap { since[$0] }.min() ?? (seeding ? first : max(first, now)) }
         var copy = row
         copy.promotedAt = since[key]
         return copy
@@ -539,58 +651,9 @@ func promotedRows(_ rows: [WorldEvent], since: [String: Date], now: Date = Date(
     return (ordered, since)
 }
 
-let alertFreshness: TimeInterval = 3 * 3600
-let alertsPerPass = 3, alertsPerHour = 6, alertsPerDay = 24, alertsPerTopicHour = 2
-
-func alertKey(_ row: WorldEvent) -> String { row.storyID ?? row.id }
-
-/// Which rows deserve a notification: big events, and followed-topic stories confirmed by two outlets including
-/// a primary one. Each story at most once, only while under three hours old, never during quiet hours, within
-/// per-pass, hourly, daily and per-topic caps. The first run only records what is already there.
-func alertDecision(rows: [WorldEvent], topics: [FollowTopic], settings: AlertSettings, ledger: AlertLedger, now: Date = Date(), calendar: Calendar = .current) -> (send: [WorldEvent], ledger: AlertLedger) {
-    var ledger = ledger
-    ledger.sent = ledger.sent.filter { now.timeIntervalSince($0.value) <= 4 * 86400 }
-    ledger.delivered = ledger.delivered.filter { now.timeIntervalSince($0) <= 86400 }
-    ledger.byTopic = ledger.byTopic.mapValues { $0.filter { now.timeIntervalSince($0) <= 3600 } }.filter { !$0.value.isEmpty }
-    let alerting = Set(topics.filter(\.alerts).map(\.id))
-    func alertTopics(_ row: WorldEvent) -> [String] { (row.followTopics ?? []).filter(alerting.contains) }
-    func eligible(_ row: WorldEvent) -> Bool {
-        if row.major == true && settings.major { return true }
-        guard settings.topics, !alertTopics(row).isEmpty else { return false }
-        return (row.storyOutlets?.count ?? 1) >= 2 && (row.primaryOutlets ?? 0) >= 1
-    }
-    let candidates = rows.filter { eligible($0) && ledger.sent[alertKey($0)] == nil }
-    if !ledger.seeded {
-        for row in candidates { ledger.sent[alertKey(row)] = now }
-        ledger.seeded = true
-        return ([], ledger)
-    }
-    guard !settings.isQuiet(now, calendar: calendar) else { return ([], ledger) }
-    let fresh = candidates.filter { now.timeIntervalSince(attentionDate($0)) <= alertFreshness }.sorted { a, b in
-        if (a.major == true) != (b.major == true) { return a.major == true }
-        let oa = a.storyOutlets?.count ?? 1, ob = b.storyOutlets?.count ?? 1
-        if oa != ob { return oa > ob }
-        return attentionDate(a) > attentionDate(b)
-    }
-    var send: [WorldEvent] = []
-    for row in fresh {
-        guard send.count < alertsPerPass, ledger.delivered.count < alertsPerDay,
-              ledger.delivered.filter({ now.timeIntervalSince($0) <= 3600 }).count < alertsPerHour else { break }
-        let ids = row.major == true ? [] : alertTopics(row)
-        if ids.contains(where: { (ledger.byTopic[$0]?.count ?? 0) >= alertsPerTopicHour }) { continue }
-        send.append(row)
-        ledger.sent[alertKey(row)] = now
-        ledger.delivered.append(now)
-        for id in ids { ledger.byTopic[id, default: []].append(now) }
-    }
-    return (send, ledger)
-}
-
-/// Notification text: title is 「大事」 or the topic names, body the headline with its outlet count.
-func alertContent(_ row: WorldEvent, topics: [FollowTopic]) -> (title: String, body: String) {
-    let label = row.major == true ? (topicLabel(row.followTopics, topics: topics).map { "大事 · " + $0 } ?? "大事") : (topicLabel(row.followTopics, topics: topics) ?? "关注")
-    let count = row.storyOutlets.map { " · \($0.count) 家媒体" } ?? (row.severity.map { " · " + $0 } ?? "")
-    return (label, (row.factNote.map { "【\($0)】" } ?? "") + row.displayTitle + count)
+/// Reads the promotion stamps saved by 2.11–2.13 inside the notification ledger (alert-ledger.json).
+struct LegacyAlertLedger: Decodable {
+    var majorSince: [String: Date]?
 }
 
 // MARK: - Topic history (2.12)
@@ -606,14 +669,17 @@ struct TopicHistoryItem: Codable, Sendable {
 let topicHistoryRetention: TimeInterval = 14 * 86400
 let topicHistoryPerTopic = 300
 
-func mergedTopicHistory(_ history: [TopicHistoryItem], rows: [WorldEvent], now: Date = Date()) -> [TopicHistoryItem] {
+/// Saved history is the live rows plus what has left the story index. While a headline is still indexed the live
+/// view is authoritative: an item saved under a story id that clustering has since changed, or for a story that no
+/// longer qualifies, is dropped instead of showing next to its current version.
+func mergedTopicHistory(_ history: [TopicHistoryItem], rows: [WorldEvent], indexed: (String) -> Bool = { _ in false }, now: Date = Date()) -> [TopicHistoryItem] {
     var byKey: [String: TopicHistoryItem] = [:]
-    for item in history { byKey[alertKey(item.event)] = item }
+    for item in history where !indexed(item.event.id) && !indexed(storyKey(item.event)) { byKey[storyKey(item.event)] = item }
     for row in rows {
         guard let topics = row.followTopics, !topics.isEmpty else { continue }
         var compact = row
-        compact.storyOutlets = nil; compact.storyHeat = nil
-        byKey[alertKey(row)] = TopicHistoryItem(event: compact, topics: topics, firstDate: row.storyFirstDate ?? row.date ?? now, outlets: row.storyOutlets?.count ?? 1)
+        compact.storyOutlets = nil; compact.storyHeat = nil; compact.threadStoryIDs = nil
+        byKey[storyKey(row)] = TopicHistoryItem(event: compact, topics: topics, firstDate: row.storyFirstDate ?? row.date ?? now, outlets: row.storyOutlets?.count ?? 1)
     }
     var counts: [String: Int] = [:]
     return byKey.values.filter { now.timeIntervalSince($0.firstDate) <= topicHistoryRetention }
@@ -628,10 +694,10 @@ func mergedTopicHistory(_ history: [TopicHistoryItem], rows: [WorldEvent], now: 
 /// A topic page: live rows first-hand, then older history that the live index no longer holds.
 func topicTimeline(_ topicID: String, live: [WorldEvent], history: [TopicHistoryItem]) -> [WorldEvent] {
     let rows = live.filter { $0.followTopics?.contains(topicID) == true }
-    var keys = Set(rows.map(alertKey)), titles = Set(rows.map { topicMatchText($0.displayTitle) }), urls = Set(rows.map { canonicalNewsURL($0.url) })
+    var keys = Set(rows.flatMap { [storyKey($0)] + ($0.threadStoryIDs ?? []) }), titles = Set(rows.map { topicMatchText($0.displayTitle) }), urls = Set(rows.map { canonicalNewsURL($0.url) })
     var older: [WorldEvent] = []
     for item in history where item.topics.contains(topicID) {
-        let key = alertKey(item.event), title = topicMatchText(item.event.displayTitle), url = canonicalNewsURL(item.event.url)
+        let key = storyKey(item.event), title = topicMatchText(item.event.displayTitle), url = canonicalNewsURL(item.event.url)
         guard !keys.contains(key), !titles.contains(title), !urls.contains(url) else { continue }
         keys.insert(key); titles.insert(title); urls.insert(url)
         var row = item.event

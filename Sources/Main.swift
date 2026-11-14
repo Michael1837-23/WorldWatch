@@ -3,7 +3,6 @@ import Combine
 import OSLog
 import SwiftUI
 import Translation
-import UserNotifications
 import WidgetKit
 
 let storyLog = Logger(subsystem: "local.michael.worldwatch", category: "stories")
@@ -54,15 +53,9 @@ struct CachedFeed: Codable {
     private var topicMatcher = TopicMatcher(FollowTopic.selected)
     private var followedIDs = Set<String>()
     private var extraAttempt: [String: Date] = [:]
-    // 提醒 (2.11)
-    @Published var alertSettings = AlertSettings.selected
-    @Published var notificationStatus = "尚未请求系统通知权限"
-    /// While macOS denies notifications, alerts are only recorded, so they neither pile up nor use the hourly and daily caps.
-    private var notificationsDenied = false
-    private var alertLedger = AlertLedger()
-    /// Stories already in the view when the app starts, or arriving with the first round of topic searches, are recorded silently.
-    private let alertWarmUntil = Date().addingTimeInterval(8 * 60)
-    private let alertLedgerURL = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("WorldWatch/alert-ledger.json")
+    // 大事排序 (2.11): when each big event first passed the gate. Notifications were removed in 2.14.
+    private var majorSince: [String: Date] = [:]
+    private let majorSinceURL = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("WorldWatch/major-since.json")
     // 对象页 (2.12): followed stories kept for two weeks after they leave the 72-hour index.
     @Published var topicHistory: [TopicHistoryItem] = []
     private var historySaved = Date.distantPast
@@ -83,9 +76,13 @@ struct CachedFeed: Codable {
     private func noteFollowed(_ events: [WorldEvent]) {
         for event in events where !event.disaster && !topicMatcher.topicIDs(event).isEmpty { followedIDs.insert(event.id) }
     }
+    /// Every report of the row's event: its own story, and for a joined row the stories folded into it.
     func storyMembers(_ event: WorldEvent) -> [WorldEvent] {
-        guard let stories, let story = stories.story(for: event.id) else { return [] }
-        return story.memberIDs.compactMap { stories.events[$0] }.sorted { ($0.date ?? .distantPast) > ($1.date ?? .distantPast) }
+        guard let stories else { return [] }
+        var seen = Set<String>()
+        let ids = [stories.story(for: event.id)?.id, event.storyID].compactMap { $0 } + (event.threadStoryIDs ?? [])
+        return ids.compactMap { stories.story(for: $0) }.filter { seen.insert($0.id).inserted }.flatMap(\.memberIDs)
+            .compactMap { stories.events[$0] }.sorted { ($0.date ?? .distantPast) > ($1.date ?? .distantPast) }
     }
     func isNew(_ event: WorldEvent) -> Bool {
         guard let lastViewed else { return false }
@@ -116,7 +113,7 @@ struct CachedFeed: Codable {
         migrateToFollowedView()
         migrateNewPresets()
         filter = Self.scope(for: widgetDisplayMode)
-        if let data = try? Data(contentsOf: alertLedgerURL), let ledger = try? JSONDecoder().decode(AlertLedger.self, from: data) { alertLedger = ledger }
+        loadMajorSince()
         if let data = try? Data(contentsOf: topicHistoryURL), let history = try? JSONDecoder().decode([TopicHistoryItem].self, from: data) { topicHistory = mergedTopicHistory(history, rows: []) }
         if let data = try? Data(contentsOf: storyIndexURL), let index = try? JSONDecoder().decode([String: StoryEntry].self, from: data) {
             noteFollowed(index.values.map(\.event))
@@ -154,14 +151,27 @@ struct CachedFeed: Codable {
         NewsDisplayMode.selected = .followed
         UserDefaults.standard.set(true, forKey: "followedViewV210")
     }
-    /// 2.13: OpenAI and 苹果 join the presets and are added once to a saved list.
+    /// Presets added after a list was saved join it once: OpenAI and 苹果 in 2.13; 中东局势, Anthropic, 特斯拉 and 台积电 in 2.14.
+    /// A preset the user deletes afterwards stays deleted.
     private func migrateNewPresets() {
-        guard !UserDefaults.standard.bool(forKey: "topicsV213") else { return }
-        let list = FollowTopic.adding(["openai", "apple"], to: FollowTopic.selected)
-        if list != FollowTopic.selected { FollowTopic.selected = list }
+        let saved = FollowTopic.selected
+        var list = saved
+        for (flag, ids) in newPresetBatches where !UserDefaults.standard.bool(forKey: flag) {
+            list = FollowTopic.adding(ids, to: list)
+            UserDefaults.standard.set(true, forKey: flag)
+        }
+        if list != saved { FollowTopic.selected = list }
         topics = list
         topicMatcher = TopicMatcher(list)
-        UserDefaults.standard.set(true, forKey: "topicsV213")
+    }
+    /// 2.14: no more notifications. The big-event stamps move out of the old notification ledger, which is deleted
+    /// together with the notification settings.
+    private func loadMajorSince() {
+        if let data = try? Data(contentsOf: majorSinceURL), let since = try? JSONDecoder().decode([String: Date].self, from: data) { majorSince = since; return }
+        let legacy = majorSinceURL.deletingLastPathComponent().appendingPathComponent("alert-ledger.json")
+        if let data = try? Data(contentsOf: legacy), let ledger = try? JSONDecoder().decode(LegacyAlertLedger.self, from: data) { majorSince = ledger.majorSince ?? [:] }
+        try? FileManager.default.removeItem(at: legacy)
+        WorldPreferences.shared.removeObject(forKey: "alertSettings")
     }
     /// The followed view from the current stories, off the main thread; used when topics or the gate change.
     func refollow() {
@@ -174,14 +184,18 @@ struct CachedFeed: Codable {
             publishWidgetSnapshot(forceReload: true)
         }
     }
-    /// Work that follows a new followed view: big-event ordering, alerts and the two-week topic history
+    /// Work that follows a new followed view: big-event ordering and the two-week topic history
     /// (saved at most every five minutes).
     private func followUpdated() {
-        let promoted = promotedRows(follow.rows, since: alertLedger.majorSince)
-        alertLedger.majorSince = promoted.since
+        let promoted = promotedRows(follow.rows, since: majorSince)
+        majorSince = promoted.since
         follow.rows = promoted.rows
-        deliverAlerts(follow.rows)
-        topicHistory = mergedTopicHistory(topicHistory, rows: follow.rows)
+        do {
+            try FileManager.default.createDirectory(at: majorSinceURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try JSONEncoder().encode(majorSince).write(to: majorSinceURL, options: .atomic)
+        } catch { storyLog.error("大事时间保存失败：\(error.localizedDescription, privacy: .public)") }
+        let indexed = stories?.events
+        topicHistory = mergedTopicHistory(topicHistory, rows: follow.rows, indexed: { indexed?[$0] != nil })
         guard Date().timeIntervalSince(historySaved) >= 300 else { return }
         historySaved = Date()
         let history = topicHistory, url = topicHistoryURL
@@ -191,69 +205,6 @@ struct CachedFeed: Codable {
                 try JSONEncoder().encode(history).write(to: url, options: .atomic)
             } catch { storyLog.error("对象历史保存失败：\(error.localizedDescription, privacy: .public)") }
         }
-    }
-    private func deliverAlerts(_ rows: [WorldEvent]) {
-        refreshNotificationStatus()
-        var ledger = alertLedger
-        if Date() < alertWarmUntil || notificationsDenied { ledger.seeded = false }
-        let decision = alertDecision(rows: rows, topics: topics, settings: alertSettings, ledger: ledger)
-        alertLedger = decision.ledger
-        do {
-            try FileManager.default.createDirectory(at: alertLedgerURL.deletingLastPathComponent(), withIntermediateDirectories: true)
-            try JSONEncoder().encode(alertLedger).write(to: alertLedgerURL, options: .atomic)
-        } catch { storyLog.error("提醒记录保存失败：\(error.localizedDescription, privacy: .public)") }
-        guard !decision.send.isEmpty else { return }
-        let center = UNUserNotificationCenter.current()
-        for row in decision.send {
-            let text = alertContent(row, topics: topics)
-            let content = UNMutableNotificationContent()
-            content.title = text.title
-            content.body = text.body
-            content.sound = .default
-            content.threadIdentifier = row.major == true ? "major" : (row.followTopics?.first ?? "follow")
-            content.userInfo = ["url": row.url.absoluteString]
-            center.add(UNNotificationRequest(identifier: "worldwatch." + alertKey(row), content: content, trigger: nil)) { error in
-                if let error { storyLog.error("通知发送失败：\(error.localizedDescription, privacy: .public)") }
-            }
-            storyLog.notice("提醒：\(text.title, privacy: .public) · \(row.displayTitle, privacy: .public)")
-        }
-    }
-    func setAlertSettings(_ value: AlertSettings) {
-        alertSettings = value
-        AlertSettings.selected = value
-        if value.major || value.topics { requestNotificationPermission() }
-    }
-    func requestNotificationPermission() {
-        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in
-            Task { @MainActor in self.refreshNotificationStatus() }
-        }
-    }
-    /// Re-read the system setting; the user may allow notifications in System Settings at any time.
-    func refreshNotificationStatus() {
-        UNUserNotificationCenter.current().getNotificationSettings { settings in
-            let status: String
-            let denied = settings.authorizationStatus == .denied
-            switch settings.authorizationStatus {
-            case .authorized, .provisional: status = settings.alertSetting == .enabled ? "系统通知已允许" : "系统通知已允许，但横幅被关闭"
-            case .denied: status = "系统通知被拒绝：请在系统设置 → 通知 → 世界动态中开启「允许通知」"
-            default: status = "尚未决定是否允许系统通知"
-            }
-            Task { @MainActor in
-                // Alerts counted while denied never reached the user: give the caps back once allowed.
-                if self.notificationsDenied && !denied {
-                    self.alertLedger.delivered = []
-                    self.alertLedger.byTopic = [:]
-                }
-                self.notificationsDenied = denied
-                self.notificationStatus = status
-            }
-        }
-    }
-    func setTopicAlerts(_ topic: FollowTopic, on: Bool) {
-        setTopics(topics.map { item in
-            guard item.id == topic.id else { return item }
-            var updated = item; updated.alerts = on; return updated
-        })
     }
     func setTopics(_ list: [FollowTopic]) {
         let trimmed = Array(list.prefix(FollowTopic.limit))
@@ -618,7 +569,8 @@ struct CachedFeed: Codable {
         var snapshot = refreshedSnapshot(previous: previous, results: results, now: checked == .distantPast ? publishedAt : checked, enabledIDs: enabledSources.map(\.id), mode: widgetDisplayMode, observedAt: publishedAt)
         snapshot.conflictSignals = mergedConflictSignals(snapshot.conflictSignals ?? [], observedConflicts, enabledIDs: enabledSources.map(\.id), now: publishedAt)
         snapshot.updatedAt = publishedAt
-        snapshot.followedEvents = Array(follow.rows.prefix(40))
+        // The widgets never open an event page, so the folded story ids stay out of the shared snapshot.
+        snapshot.followedEvents = follow.rows.prefix(40).map { row in var compact = row; compact.threadStoryIDs = nil; return compact }
         if let previous, !sameDigest(previous.rotationEvents ?? previous.events, snapshot.rotationEvents ?? snapshot.events) {
             snapshot.changedAt = publishedAt
         }
@@ -702,6 +654,11 @@ struct EventRow: View {
 struct StoryMembersView: View {
     let event: WorldEvent
     let members: [WorldEvent]
+    /// A joined row shows its latest development; its event began with the earliest report among all its stories.
+    private var firstReport: Date? {
+        guard event.threadStoryIDs != nil else { return event.storyFirstDate }
+        return members.filter { !(NewsSource.find($0.sourceID)?.dateOnly ?? false) }.compactMap(\.date).min() ?? event.storyFirstDate
+    }
     var body: some View {
         let sides = eventSides(members)
         let both = !sides.chinese.isEmpty && !sides.foreign.isEmpty
@@ -709,7 +666,7 @@ struct StoryMembersView: View {
             Text(event.displayTitle).font(.system(size: 14, weight: .semibold)).fixedSize(horizontal: false, vertical: true)
             HStack(spacing: 6) {
                 Text(["\(event.storyOutlets?.count ?? members.count) 家媒体",
-                      event.storyFirstDate.map { "首报 \(shortTimeLabel($0))" },
+                      firstReport.map { "首报 \(shortTimeLabel($0))" },
                       sides.primaryOutlets > 0 ? "其中一档 \(sides.primaryOutlets) 家" : nil].compactMap { $0 }.joined(separator: " · "))
                 if let note = event.factNote { Text("· " + note) }
             }
@@ -1170,47 +1127,6 @@ struct FollowTopicsSection: View {
     }
 }
 
-/// 提醒 settings: big events, followed-topic news, quiet hours.
-struct AlertSection: View {
-    @ObservedObject var store: EventStore
-    private func update(_ change: (inout AlertSettings) -> Void) {
-        var value = store.alertSettings
-        change(&value)
-        store.setAlertSettings(value)
-    }
-    var body: some View {
-        Section {
-            Toggle(isOn: Binding(get: { store.alertSettings.major }, set: { on in update { $0.major = on } })) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("重磅大事")
-                    Text("达到大事门槛、或红色预警与 7 级以上地震").font(.system(size: 11)).foregroundStyle(.secondary)
-                }
-            }
-            Toggle(isOn: Binding(get: { store.alertSettings.topics }, set: { on in update { $0.topics = on } })) {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text("关注对象的新进展")
-                    Text("已有两家媒体（含一家通讯社、主流媒体或官方来源）报道的新事件；每个对象可在上方单独关闭").font(.system(size: 11)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-                }
-            }
-            Toggle("免打扰时段", isOn: Binding(get: { store.alertSettings.quiet }, set: { on in update { $0.quiet = on } }))
-            if store.alertSettings.quiet {
-                HStack {
-                    Picker("从", selection: Binding(get: { store.alertSettings.quietStart }, set: { hour in update { $0.quietStart = hour } })) {
-                        ForEach(0..<24, id: \.self) { Text(String(format: "%02d:00", $0)).tag($0) }
-                    }
-                    Picker("到", selection: Binding(get: { store.alertSettings.quietEnd }, set: { hour in update { $0.quietEnd = hour } })) {
-                        ForEach(0..<24, id: \.self) { Text(String(format: "%02d:00", $0)).tag($0) }
-                    }
-                }
-            }
-            LabeledContent("系统通知") { Text(store.notificationStatus).foregroundStyle(.secondary).multilineTextAlignment(.trailing) }
-        } header: { Text("提醒") } footer: {
-            Text("同一事件只提醒一次，只提醒首报 3 小时内的事；每次最多 3 条，每小时最多 \(alertsPerHour) 条、每天最多 \(alertsPerDay) 条，同一对象每小时最多 \(alertsPerTopicHour) 条。免打扰时段内不提醒，结束后仍在 3 小时内的会补发。App 启动后的前几分钟只记录、不提醒。点击通知打开原报道。")
-                .foregroundStyle(.secondary)
-        }
-    }
-}
-
 func splitAliases(_ text: String) -> [String] {
     var seen = Set<String>()
     return text.components(separatedBy: CharacterSet(charactersIn: ",，、;；\n")).map { $0.trimmingCharacters(in: .whitespaces) }
@@ -1247,7 +1163,6 @@ struct TopicEditor: View {
                 }
                 Text("补全搜索：\(topic.queryZH) ｜ \(topic.queryEN)").font(.system(size: 11)).foregroundStyle(.secondary).textSelection(.enabled)
                 Toggle("显示股价与指数涨跌", isOn: Binding(get: { topic.showTicks }, set: { on in var updated = topic; updated.showTicks = on; save(updated) }))
-                Toggle("新进展推送提醒", isOn: Binding(get: { topic.alerts }, set: { on in var updated = topic; updated.alerts = on; save(updated) }))
                 HStack {
                     Button("保存修改") { save(edited) }.disabled(edited == topic)
                     Spacer()
@@ -1271,7 +1186,6 @@ struct SettingsView: View {
         VStack(spacing: 0) {
             Form {
                 FollowTopicsSection(store: store)
-                AlertSection(store: store)
                 Section {
                     Picker("显示方式", selection: Binding(get: { store.widgetDisplayMode }, set: { store.setWidgetDisplayMode($0) })) {
                         ForEach(NewsDisplayMode.allCases, id: \.self) { Text($0.title).tag($0) }
@@ -1417,7 +1331,7 @@ struct SettingsView: View {
     }
 }
 
-@MainActor final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate, UNUserNotificationCenterDelegate {
+@MainActor final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     let store = EventStore()
     var panel: NSWindow!
     var item: NSStatusItem!
@@ -1454,8 +1368,6 @@ struct SettingsView: View {
         NotificationCenter.default.addObserver(forName: NSWindow.didResignKeyNotification, object: panel, queue: .main) { [weak self] _ in
             MainActor.assumeIsolated { self?.store.markViewed() }
         }
-        UNUserNotificationCenter.current().delegate = self
-        if store.alertSettings.major || store.alertSettings.topics { store.requestNotificationPermission() }
         store.start()
         store.startCameras()
         store.startMapLayers()
@@ -1496,16 +1408,6 @@ struct SettingsView: View {
     func application(_ application: NSApplication, open urls: [URL]) { show() }
     @objc func refresh() { Task { await store.refresh(reloadWidget: true) } }
     @objc func quit() { NSApp.terminate(nil) }
-    // Notifications show while the app runs (it is a menu-bar app, so it is often "active"); clicking opens the report.
-    nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent notification: UNNotification, withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void) {
-        completionHandler([.banner, .list, .sound])
-    }
-    nonisolated func userNotificationCenter(_ center: UNUserNotificationCenter, didReceive response: UNNotificationResponse, withCompletionHandler completionHandler: @escaping () -> Void) {
-        if let text = response.notification.request.content.userInfo["url"] as? String, let url = URL(string: text) {
-            DispatchQueue.main.async { NSWorkspace.shared.open(url) }
-        }
-        completionHandler()
-    }
 }
 
 @main struct WorldWatchMain {

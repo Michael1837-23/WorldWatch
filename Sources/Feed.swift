@@ -85,6 +85,8 @@ struct WorldEvent: Identifiable, Codable, Sendable {
     var historyOutlets: Int? = nil
     /// When a story first passed the big-event gate; big events are ordered by it so a story that grows into one rises.
     var promotedAt: Date? = nil
+    /// Further stories about the same event, folded into this row (2.14); the row's own story is `storyID`.
+    var threadStoryIDs: [String]? = nil
     var displayTitle: String { translatedTitle ?? title }
     var sourceName: String { publisher ?? NewsSource.find(sourceID)?.name ?? sourceID }
     var isDomestic: Bool { NewsSource.find(sourceID)?.domestic ?? false }
@@ -800,7 +802,7 @@ func fetchSource(_ source: NewsSource, timeout: Double = 25) async throws -> [Wo
     var request = URLRequest(url: source.url)
     request.timeoutInterval = timeout
     request.cachePolicy = .reloadIgnoringLocalCacheData
-    request.setValue("WorldWatch/2.13 (personal desktop news reader)", forHTTPHeaderField: "User-Agent")
+    request.setValue("WorldWatch/2.14 (personal desktop news reader)", forHTTPHeaderField: "User-Agent")
     for attempt in 0..<2 {
         do {
             let (data, response) = try await newsSession.data(for: request)

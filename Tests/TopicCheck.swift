@@ -1,6 +1,6 @@
 import Foundation
 
-// 关注追踪 checks (2.10–2.12): topic matching, outlet tiers, fact labels, the followed view, alerts and topic history.
+// 关注追踪 checks (2.10–2.14): topic matching, outlet tiers, fact labels, the followed view, big-event ordering and topic history.
 
 private func require(_ condition: Bool, _ message: String) {
     if !condition { fflush(stdout); fatalError("FAIL: " + message) }
@@ -55,6 +55,21 @@ func topicChecks() throws {
     let withKeyword = saved + [FollowTopic(id: "kw-1", name: "openai", aliases: ["openai"])]
     require(FollowTopic.adding(["openai", "apple"], to: withKeyword).map(\.id) == withKeyword.map(\.id) + ["apple"], "已有同名关注词时不重复添加")
     require(FollowTopic.adding(["openai"], to: FollowTopic.adding(["openai"], to: saved)).filter { $0.id == "openai" }.count == 1, "重复执行不重复添加")
+    // 2.14 presets, and the look-alikes they must not catch.
+    require(ids("Iran strikes US base in Bahrain; Israel weighs response") == ["mideast"] && ids("以军总参谋长主张暂缓对伊朗动武") == ["mideast"], "伊朗与以色列")
+    require(ids("胡塞武装袭击红海商船") == ["mideast"] && ids("Hezbollah fires rockets from Lebanon") == ["mideast"] && ids("霍爾木茲海峽航運受阻") == ["mideast"], "胡塞、真主党与繁体霍尔木兹")
+    require(!ids("中方将以军事手段回应挑衅").contains("mideast") && ids("Iranian foreign minister visits Beijing") == ["mideast"], "以军事不算以军")
+    require(ids("Anthropic files for IPO") == ["anthropic"] && ids("Anthropic 的 Claude Opus 5 登顶编程榜") == ["anthropic"] && ids("Claude AI gets memory feature") == ["anthropic"], "Anthropic 与 Claude")
+    require(!ids("Claude Monet painting sells for record sum").contains("anthropic")
+            && !ids("Outlook、Teams、Copilot、ChatGPT、Claude：微软故障持续未解").contains("anthropic"), "Claude 单独出现不算 Anthropic")
+    require(ids("Tesla opens Cybercab orders to individual buyers") == ["tesla"] && ids("马斯克：特斯拉明年量产 Cybercab") == ["musk", "tesla"], "特斯拉与马斯克")
+    require(!ids("Waymo expands robotaxi service to Miami").contains("tesla"), "Robotaxi 不算特斯拉")
+    require(ids("台積電員工資料外洩") == ["tsmc"] && ids("TSMC to expand advanced packaging capacity") == ["tsmc"] && ids("英伟达加大台积电订单") == ["nvidia", "tsmc"], "台积电与繁体")
+    let v213 = FollowTopic.adding(["openai", "apple"], to: saved)
+    var batched = v213
+    for batch in newPresetBatches { batched = FollowTopic.adding(batch.ids, to: batched) }
+    require(batched.map(\.id) == v213.map(\.id) + ["mideast", "anthropic", "tesla", "tsmc"] && batched.count == FollowTopic.presets.count, "2.13 的清单补上 2.14 的四个对象")
+    require(Set(newPresetBatches.flatMap(\.ids)).isSubset(of: Set(FollowTopic.presets.map(\.id))), "迁移的对象都在预置里")
     let full = (0..<FollowTopic.limit).map { FollowTopic(id: "t\($0)", name: "对象\($0)", aliases: ["对象\($0)"]) }
     require(FollowTopic.adding(["openai"], to: full).count == FollowTopic.limit, "满 20 个不再添加")
 
@@ -63,7 +78,7 @@ func topicChecks() throws {
     custom.aliases = ["OpenAI"]; custom.fillQueries()
     require(custom.queryZH == "OpenAI" && custom.queryEN == "OpenAI", "只有英文别名时中文搜索也用英文")
     let decoded = try JSONDecoder().decode([FollowTopic].self, from: Data(#"[{"id":"x","name":"欧盟"}]"#.utf8))
-    require(decoded[0].aliases == ["欧盟"] && decoded[0].queryZH == "欧盟" && decoded[0].alerts, "缺字段时的默认值")
+    require(decoded[0].aliases == ["欧盟"] && decoded[0].queryZH == "欧盟" && !decoded[0].showTicks, "缺字段时的默认值")
     let roundTrip = try JSONDecoder().decode([FollowTopic].self, from: JSONEncoder().encode(topics))
     require(roundTrip == topics, "关注对象编码往返")
 
@@ -144,7 +159,7 @@ func topicChecks() throws {
     require(shown == ["f1", "d1", "a1", "usgs:big", "g0", "i1"], "关注列表的入选与顺序：\(shown)")
     let starship = follow.rows.first { $0.storyID == "a1" }!
     require(starship.followTopics == ["spacex"] && starship.primaryOutlets == 1 && starship.storyOutlets?.count == 2 && starship.publisher == "Reuters" && starship.factNote == nil, "SpaceX 事件")
-    require(follow.rows.first { $0.storyID == "f1" }!.factNote == "据报道" && follow.rows.first { $0.storyID == "f1" }!.followTopics == ["spacex"], "传闻标「据报道」")
+    require(follow.rows.first { $0.storyID == "f1" }!.factNote == "据报道" && follow.rows.first { $0.storyID == "f1" }!.followTopics == ["spacex", "tesla"], "传闻标「据报道」")
     require(follow.rows.first { $0.storyID == "g0" }!.major == true && follow.rows.first { $0.storyID == "g0" }!.followTopics == nil, "10 家外媒报道的非关注事件是大事")
     let war = follow.rows.first { $0.storyID == "i1" }!
     require(war.followTopics == ["ukraine"] && war.major == nil && war.publisher == "新京报", "超过 24 小时不再算大事；一档媒体里优先中文标题")
@@ -182,7 +197,6 @@ func topicChecks() throws {
     require(widgetTimeline(snapshot, now: now, pageSize: 4)[0].note == "关注对象暂无新报道", "没有关注报道时的提示")
     require(NewsDisplayMode.allCases.first == .followed && NewsDisplayMode.followed.title == "关注优先", "关注优先排第一")
 
-    // Alerts: first run only records; quiet hours; caps; freshness; eligibility.
     var calendar = Calendar(identifier: .gregorian); calendar.timeZone = TimeZone(identifier: "Asia/Shanghai")!
     let noon = calendar.date(from: DateComponents(year: 2026, month: 11, day: 14, hour: 12))!
     func row(_ id: String, topics ids: [String]? = nil, major: Bool = false, outlets: Int = 2, primary: Int = 1, minutesAgo: Double = 20) -> WorldEvent {
@@ -192,29 +206,6 @@ func topicChecks() throws {
         event.storyFirstDate = event.date
         return event
     }
-    let settings = AlertSettings()
-    var first = alertDecision(rows: [row("m1", major: true)], topics: topics, settings: settings, ledger: AlertLedger(), now: noon, calendar: calendar)
-    require(first.send.isEmpty && first.ledger.seeded && first.ledger.sent["m1"] != nil, "首次运行只记录，不推送")
-    first = alertDecision(rows: [row("m1", major: true), row("m2", major: true), row("t1", topics: ["musk"]), row("t2", topics: ["musk"], outlets: 1),
-                                 row("t3", topics: ["musk"], primary: 0), row("t4", topics: ["musk"], minutesAgo: 200)],
-                          topics: topics, settings: settings, ledger: first.ledger, now: noon, calendar: calendar)
-    require(first.send.map(\.id) == ["m2", "t1"], "只推新的大事和已证实的关注事件：\(first.send.map(\.id))")
-    let again = alertDecision(rows: [row("m2", major: true)], topics: topics, settings: settings, ledger: first.ledger, now: noon.addingTimeInterval(60), calendar: calendar)
-    require(again.send.isEmpty, "同一事件只提醒一次")
-    let night = calendar.date(from: DateComponents(year: 2026, month: 11, day: 14, hour: 23, minute: 30))!
-    let quiet = alertDecision(rows: [row("q1", major: true, minutesAgo: 0)], topics: topics, settings: settings, ledger: first.ledger, now: night, calendar: calendar)
-    require(quiet.send.isEmpty && quiet.ledger.sent["q1"] == nil, "免打扰时段不推送也不记为已推")
-    require(settings.isQuiet(calendar.date(from: DateComponents(year: 2026, month: 11, day: 15, hour: 6))!, calendar: calendar) && !settings.isQuiet(noon, calendar: calendar), "跨午夜的免打扰")
-    let burst = alertDecision(rows: (1...5).map { row("b\($0)", major: true) }, topics: topics, settings: settings, ledger: AlertLedger(seeded: true), now: noon, calendar: calendar)
-    require(burst.send.count == alertsPerPass, "每轮最多 3 条")
-    let perTopic = alertDecision(rows: (1...3).map { row("p\($0)", topics: ["trump"]) }, topics: topics, settings: settings, ledger: AlertLedger(seeded: true), now: noon, calendar: calendar)
-    require(perTopic.send.count == alertsPerTopicHour, "同一对象每小时最多 2 条")
-    var muted = topics; muted[1].alerts = false
-    require(alertDecision(rows: [row("x1", topics: ["trump"])], topics: muted, settings: settings, ledger: AlertLedger(seeded: true), now: noon, calendar: calendar).send.isEmpty, "关闭单个对象的提醒")
-    var hourly = AlertLedger(seeded: true); hourly.delivered = (0..<alertsPerHour).map { noon.addingTimeInterval(Double(-$0 * 60)) }
-    require(alertDecision(rows: [row("y1", major: true)], topics: topics, settings: settings, ledger: hourly, now: noon, calendar: calendar).send.isEmpty, "每小时上限")
-    let content = alertContent(follow.rows.first { $0.storyID == "f1" }!, topics: topics)
-    require(content.title == "SpaceX" && content.body.hasPrefix("【据报道】") && alertContent(quake.with(major: true), topics: topics).title == "大事", "通知文字：\(content)")
 
     // Big events are ordered by when they became big; the first run does not lift existing ones.
     var grown = row("grow", major: true, minutesAgo: 8 * 60)
@@ -224,9 +215,12 @@ func topicChecks() throws {
     grown.storyID = "grow2"
     let later = promotedRows([fresh, grown], since: seededRun.since, now: noon)
     require(later.rows.map(\.id) == ["grow", "fresh"] && later.rows[0].promotedAt == noon, "新晋大事升到最前")
-    let promotedAlert = alertDecision(rows: later.rows, topics: topics, settings: settings, ledger: AlertLedger(seeded: true), now: noon, calendar: calendar)
-    require(promotedAlert.send.first?.id == "grow", "首报 8 小时后才成为大事的仍会提醒")
-    require(try JSONDecoder().decode(AlertLedger.self, from: Data(#"{"sent":{},"seeded":true,"delivered":[],"byTopic":{}}"#.utf8)).seeded, "旧版提醒记录可读")
+    let legacy = try JSONDecoder().decode(LegacyAlertLedger.self, from: Data(#"{"sent":{},"seeded":true,"delivered":[],"byTopic":{},"majorSince":{"s1":800000000}}"#.utf8))
+    require(legacy.majorSince?["s1"] == Date(timeIntervalSinceReferenceDate: 800_000_000), "从旧版提醒记录读出大事时间")
+    require(try JSONDecoder().decode(LegacyAlertLedger.self, from: Data(#"{"sent":{},"seeded":true}"#.utf8)).majorSince == nil, "更早的提醒记录没有大事时间")
+    let oldTopic = try JSONDecoder().decode([FollowTopic].self, from: Data(#"[{"id":"musk","name":"马斯克","aliases":["马斯克"],"alerts":false}]"#.utf8))
+    let reencoded = String(decoding: try JSONEncoder().encode(oldTopic), as: UTF8.self)
+    require(oldTopic[0].aliases == ["马斯克"] && !reencoded.contains("alerts"), "旧清单的提醒开关读取后丢弃")
     for title in ["Trump's GOP was all they knew. Now some wonder if MAGA is dead", "Jensen Huang's Leather Jacket Comes Back to Bite Him", "11 names to watch in Nvidia's CEO search"] {
         require(isSoftNews(item("f-" + title, title, now: now)), "特写与分析：\(title)")
     }
@@ -262,16 +256,54 @@ func topicChecks() throws {
     require(courtStory(appleMentions: 2).rows.first?.followTopics == ["trump"], "12 家里 2 家提到苹果，不算苹果")
     require(courtStory(appleMentions: 3).rows.first?.followTopics == ["trump", "apple"], "12 家里 3 家提到苹果，算苹果")
 
+    // 2.14: one row per event. Background headlines make common words common.
+    var joined = StoryResult()
+    var joinedStories: [NewsStory] = []
+    func addJoined(_ members: [WorldEvent]) {
+        for member in members { joined.events[member.id] = member }
+        joinedStories.append(story(members, outlets: members.map { $0.publisher! }, now: now))
+    }
+    for i in 0..<40 { addJoined([item("bg\(i)", "Officials release new report on regional budget \(i)", publisher: "Paper \(i)", minutesAgo: 300, now: now)]) }
+    let launchOutlets = ["Reuters", "AP News", "BBC", "CNN", "The New York Times", "The Guardian"]
+    let launch = launchOutlets.enumerated().map { item("sa\($0.offset)", "SpaceX launches Starship on 15th test flight as booster is lost", publisher: $0.element, minutesAgo: 120 - Double($0.offset), now: now) }
+    let outcome = ["Bloomberg", "CNBC", "Axios"].enumerated().map { item("sb\($0.offset)", "Starship booster explodes after 15th test flight launch", publisher: $0.element, minutesAgo: 60 - Double($0.offset), now: now) }
+    let clip = [item("sc0", "Starship booster explodes minutes after 15th test flight lifts off", publisher: "Politico", minutesAgo: 30, now: now)]
+    let campus = ["Reuters", "Bloomberg", "CNBC"].enumerated().map { item("sd\($0.offset)", "SpaceX plans $74 billion AI computing campus in Texas", publisher: $0.element, minutesAgo: 90 - Double($0.offset), now: now) }
+    let scrubOld = ["Reuters", "AP News", "Space"].enumerated().map { item("se\($0.offset)", "Starship 16th flight scrubbed over valve issue", publisher: $0.element, minutesAgo: 2400 - Double($0.offset), now: now) }
+    let scrubNew = ["Reuters", "CNN", "Space"].enumerated().map { item("sf\($0.offset)", "Starship 16th flight scrubbed over valve issue again", publisher: $0.element, minutesAgo: 100 - Double($0.offset), now: now) }
+    for group in [launch, outcome, clip, campus, scrubOld, scrubNew] { addJoined(group) }
+    joined.stories = joinedStories
+    let separateRows = followAnalysis(joined, topics: topics, now: now, joinRows: false).rows
+    let joinedRows = followAnalysis(joined, topics: topics, now: now).rows
+    require(separateRows.count == 6 && joinedRows.count == 4, "同一事件合并：\(separateRows.count) → \(joinedRows.count)")
+    let flight = joinedRows.first { $0.storyID == "sa0" }!
+    require(flight.threadStoryIDs == ["sb0", "sc0"] && flight.id.hasPrefix("sb") && flight.storyOutlets?.count == 10, "合并后显示最新的大范围进展，媒体取并集：\(flight.displayTitle)")
+    require(flight.major == true && separateRows.allSatisfy { $0.major != true }, "合在一起的 10 家外媒报道成为大事")
+    require(joinedRows.contains { $0.storyID == "sd0" && $0.threadStoryIDs == nil }, "同一对象的另一件事不合并")
+    require(joinedRows.filter { $0.id.hasPrefix("se") || $0.id.hasPrefix("sf") }.count == 2, "相隔一天以上的同类报道不合并")
+    let stamped = promotedRows([flight], since: ["sb0": now.addingTimeInterval(-7200), "_seeded": now], now: now)
+    require(stamped.since["sa0"] == now.addingTimeInterval(-7200) && attentionDate(stamped.rows[0]) == flight.storyFirstDate, "合并后的行沿用已并入事件的大事时间，按最新进展排序")
+    var ghost = item("ghost", "SpaceX launches Starship (earlier version)", publisher: "Reuters", minutesAgo: 120, now: now); ghost.storyID = "sa1"; ghost.followTopics = ["spacex"]
+    var aged = item("aged", "SpaceX static fire completed", publisher: "Reuters", minutesAgo: 4 * 1440, now: now); aged.storyID = "aged"; aged.followTopics = ["spacex"]
+    let savedHistory = [TopicHistoryItem(event: ghost, topics: ["spacex"], firstDate: now.addingTimeInterval(-7200), outlets: 6),
+                 TopicHistoryItem(event: aged, topics: ["spacex"], firstDate: now.addingTimeInterval(-4 * 86400), outlets: 3)]
+    let kept = mergedTopicHistory(savedHistory, rows: joinedRows, indexed: { joined.events[$0] != nil }, now: now)
+    require(!kept.contains { $0.event.id == "ghost" } && kept.contains { $0.event.id == "aged" } && kept.contains { storyKey($0.event) == "sa0" }, "仍在索引里的旧版本不留在历史里")
+    require(kept.allSatisfy { $0.event.threadStoryIDs == nil }, "历史不存合并编号")
+    var folded = item("folded", "Older copy of the outcome", publisher: "Reuters", minutesAgo: 60, now: now); folded.storyID = "sb0"
+    let spacexPage = topicTimeline("spacex", live: joinedRows, history: [TopicHistoryItem(event: folded, topics: ["spacex"], firstDate: now.addingTimeInterval(-3600), outlets: 3)])
+    require(!spacexPage.contains { $0.id == "folded" } && spacexPage.count == joinedRows.filter { $0.followTopics?.contains("spacex") == true }.count, "对象页不重复显示已并入的事件")
+
     // Topic history and topic pages.
     var old = item("old", "Older SpaceX story", publisher: "Reuters", minutesAgo: 5 * 1440, now: now); old.storyID = "old"; old.followTopics = ["spacex"]
     let ancient = item("ancient", "Ancient SpaceX story", publisher: "Reuters", minutesAgo: 15 * 1440, now: now)
     let history = [TopicHistoryItem(event: old, topics: ["spacex"], firstDate: now.addingTimeInterval(-5 * 86400), outlets: 3),
                    TopicHistoryItem(event: ancient, topics: ["spacex"], firstDate: now.addingTimeInterval(-15 * 86400), outlets: 1)]
     let merged = mergedTopicHistory(history, rows: follow.rows, now: now)
-    require(merged.contains { $0.event.id == "old" } && !merged.contains { $0.event.id == "ancient" } && merged.contains { alertKey($0.event) == "a1" && $0.outlets == 2 }, "历史保留两周并收入当前关注事件")
+    require(merged.contains { $0.event.id == "old" } && !merged.contains { $0.event.id == "ancient" } && merged.contains { storyKey($0.event) == "a1" && $0.outlets == 2 }, "历史保留两周并收入当前关注事件")
     require(!merged.contains { $0.event.major == true && $0.topics.isEmpty }, "大事不进对象历史")
     let page = topicTimeline("spacex", live: follow.rows, history: merged)
-    require(page.map { alertKey($0) } == ["f1", "a1", "old"] && page[2].historyOutlets == 3, "对象页合并实时与历史：\(page.map { alertKey($0) })")
+    require(page.map { storyKey($0) } == ["f1", "a1", "old"] && page[2].historyOutlets == 3, "对象页合并实时与历史：\(page.map { storyKey($0) })")
     require(dayLabel(now, now: now) == "今天" && dayLabel(now.addingTimeInterval(-86400), now: now) == "昨天", "日期分组")
 
     // Event page sides.
@@ -290,7 +322,7 @@ func topicChecks() throws {
     index = updatedStoryIndex(index, with: [item("fol1", "Followed 1", source: "topic-musk-en", minutesAgo: 3001, now: now)], now: now, followed: isFollowed)
     require(index["fol1"]?.event.translatedTitle == "关注 1", "重复抓到未翻译标题时保留译文")
 
-    print("PASS: 关注对象匹配（别名、大写缩写、共现、繁简、北京时间）、自定义搜索词、搜索源与新浪来源、媒体分档、行情与传闻、软新闻、新浪解析、关注列表入选与排序、大事门槛、屏蔽词、组件退回、提醒（首次、去重、免打扰、上限、新鲜度）、对象历史与对象页、事件页分栏、关注名额")
+    print("PASS: 关注对象匹配（别名、大写缩写、共现、繁简、北京时间）、自定义搜索词、搜索源与新浪来源、媒体分档、行情与传闻、软新闻、新浪解析、关注列表入选与排序、大事门槛、屏蔽词、组件退回、大事排序、同一事件合并、对象历史与对象页、事件页分栏、关注名额")
 }
 
 private extension WorldEvent {
@@ -330,7 +362,9 @@ func followProbe() async throws {
     let indexURL = argument("--index").map { URL(fileURLWithPath: $0) } ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/WorldWatch/story-index.json")
     var index = (try? JSONDecoder().decode([String: StoryEntry].self, from: Data(contentsOf: indexURL))) ?? [:]
     let candidates = CommandLine.arguments.contains("--candidates")
-    let topics = FollowTopic.presets + (candidates ? candidateTopics : [])
+    // --only musk,trump keeps just those presets, e.g. to compare with an earlier version's list.
+    let only = argument("--only").map { Set($0.split(separator: ",").map(String.init)) }
+    let topics = FollowTopic.presets.filter { only?.contains($0.id) ?? true } + (candidates ? candidateTopics : [])
     let matcher = TopicMatcher(topics)
     let started = Date()
     index = index.filter { outletTier($0.value.event) != .low }   // the app drops these while parsing
@@ -366,6 +400,24 @@ func followProbe() async throws {
         }
         return
     }
+    if let path = argument("--dump") {
+        // Rows with their stories' members, and every headline for document frequencies: input for tuning row merging.
+        let follow = followAnalysis(result, topics: topics, now: now)
+        func text(_ e: WorldEvent) -> [String: Any] {
+            ["id": e.id, "title": e.title, "zh": e.translatedTitle ?? "", "source": e.sourceID, "publisher": e.publisher ?? "", "date": e.date?.timeIntervalSince1970 ?? 0,
+             "chineseSource": isChineseSource(e.sourceID)]
+        }
+        let rows: [[String: Any]] = follow.rows.map { row in
+            let story = result.story(for: row.id)
+            return ["story": row.storyID ?? row.id, "display": row.displayTitle, "topics": row.followTopics ?? [], "major": row.major == true,
+                    "outlets": row.storyOutlets ?? [], "primary": row.primaryOutlets ?? 0, "first": (row.storyFirstDate ?? row.date)?.timeIntervalSince1970 ?? 0,
+                    "members": (story?.memberIDs ?? [row.id]).compactMap { result.events[$0] }.map(text)]
+        }
+        let all = result.events.values.filter { !$0.disaster }.map(text)
+        try JSONSerialization.data(withJSONObject: ["now": now.timeIntervalSince1970, "rows": rows, "events": all]).write(to: URL(fileURLWithPath: path))
+        print("已导出 \(rows.count) 行到 \(path)")
+        return
+    }
     for level in MajorLevel.allCases {
         let follow = followAnalysis(result, topics: topics, level: level, now: now)
         print("\n== 大事门槛「\(level.rawValue)」：关注 \(follow.rows.filter { $0.followTopics != nil }.count) 条，大事 \(follow.majors.count) 条（24 小时）")
@@ -398,6 +450,41 @@ func followProbe() async throws {
                 let fresh = rows.filter { $0.major != true && followed.isDisjoint(with: $0.followTopics ?? []) }
                 print("  \(topic.name)：72 小时 \(rows.count) 件，24 小时 \(day.count) 件，其中大事 \(rows.filter { $0.major == true }.count) 件，原本看不到的 \(fresh.count) 件")
                 for row in fresh.prefix(searched.contains(topic.id) ? 12 : 5) { print("     · [\(row.sourceName)·\(row.storyOutlets?.count ?? 1)家] \(row.displayTitle.prefix(60))") }
+            }
+        }
+        if level == .standard {
+            let timer = Date()
+            let separate = followAnalysis(result, topics: topics, level: level, now: now, joinRows: false)
+            let plain = Date().timeIntervalSince(timer)
+            _ = followAnalysis(result, topics: topics, level: level, now: now)
+            print("  关注列表计算 \(String(format: "%.2f", plain)) 秒，含合并 \(String(format: "%.2f", Date().timeIntervalSince(timer) - plain)) 秒")
+            let joined = follow.rows.filter { $0.threadStoryIDs != nil }
+            print("  同一事件合并：\(separate.rows.count) 行 → \(follow.rows.count) 行，\(joined.count) 行各并入 \(joined.map { $0.threadStoryIDs!.count }.reduce(0, +)) 个事件；大事 \(separate.majors.count) → \(follow.majors.count)，其中因合并才过门槛 \(follow.majors.filter { row in ([row.storyID] + (row.threadStoryIDs ?? [])).allSatisfy { id in !separate.majors.contains { $0.storyID == id } } }.count) 件")
+            print("  " + topics.map { "\($0.name) \(separate.byTopic[$0.id]?.count ?? 0)→\(follow.byTopic[$0.id]?.count ?? 0)" }.joined(separator: "，"))
+            for row in follow.majors where ([row.storyID] + (row.threadStoryIDs ?? [])).allSatisfy({ id in !separate.majors.contains { $0.storyID == id } }) {
+                print("  合并后成为大事：\(row.storyOutlets?.count ?? 1)家 | \(row.displayTitle.prefix(50))")
+                for id in [row.storyID].compactMap({ $0 }) + (row.threadStoryIDs ?? []) {
+                    if let story = result.story(for: id), let lead = result.events[story.leadID] { print("        · \(story.outlets.count)家 \(lead.displayTitle.prefix(50))") }
+                }
+            }
+            // --history <file>: topic pages (live rows plus saved history) as 2.13 showed them and as they show now.
+            if let path = argument("--history"), let data = try? Data(contentsOf: URL(fileURLWithPath: path)),
+               let history = try? JSONDecoder().decode([TopicHistoryItem].self, from: data) {
+                let before = mergedTopicHistory(history, rows: separate.rows, now: now)
+                let after = mergedTopicHistory(history, rows: follow.rows, indexed: { result.events[$0] != nil }, now: now)
+                func recent(_ rows: [WorldEvent]) -> Int { rows.filter { now.timeIntervalSince($0.storyFirstDate ?? $0.date ?? now) <= 72 * 3600 }.count }
+                print("  对象页 72 小时内的行数（原历史 \(history.count) 项 → 整理后 \(after.count) 项）：" + topics.map { topic in
+                    "\(topic.name) \(recent(topicTimeline(topic.id, live: separate.rows, history: before)))→\(recent(topicTimeline(topic.id, live: follow.rows, history: after)))"
+                }.joined(separator: "，"))
+            }
+            if let flag = CommandLine.arguments.firstIndex(of: "--topic"), CommandLine.arguments.count > flag + 1 {
+                let id = CommandLine.arguments[flag + 1]
+                for row in (follow.byTopic[id] ?? []) where row.threadStoryIDs != nil {
+                    print("  [合并 \(id)] \(row.storyOutlets?.count ?? 1)家 +\(row.threadStoryIDs!.count)\(row.major == true ? " 大事" : "") | \(row.displayTitle.prefix(60))")
+                    for storyID in row.threadStoryIDs! {
+                        if let story = result.story(for: storyID), let lead = result.events[story.leadID] { print("        · \(story.outlets.count)家 \(lead.displayTitle.prefix(56))") }
+                    }
+                }
             }
         }
         if level == .standard && !candidates {

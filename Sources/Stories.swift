@@ -260,7 +260,14 @@ struct StoryResult: Sendable {
     var storyOf: [String: Int] = [:]        // event id -> index into stories
     var surging: [String] = []              // up to five rising country / person names
     var events: [String: WorldEvent] = [:]  // every indexed headline, for member lists and story leads
+    var terms: [String: Set<String>] = [:]  // headline id -> its bigrams ("z…") and English words ("e…"), for joining rows
     func story(for eventID: String) -> NewsStory? { storyOf[eventID].map { stories[$0] } }
+}
+
+/// A headline's clustering features as one set: Chinese bigrams prefixed "z", English words (the original, or the
+/// back-translation of a Chinese title) prefixed "e".
+func storyTerms(_ features: StoryFeatures) -> Set<String> {
+    Set(features.grams.map { "z" + $0 }).union(features.words.map { "e" + $0 })
 }
 
 private func storyNormalizedTitle(_ title: String) -> String {
@@ -295,6 +302,7 @@ func buildStories(_ entries: [StoryEntry], now: Date = Date(), cache: StoryFeatu
     }
     // IDF counts every headline (duplicates included), as the evaluation did.
     let itemFeatures = items.map { cache?.features($0) ?? storyFeatures($0) }
+    for (i, entry) in items.enumerated() { result.terms[entry.event.id] = storyTerms(itemFeatures[i]) }
     let features = units.map { itemFeatures[$0[0]] }
     let gramIDF = idf(itemFeatures.map(\.grams)), wordIDF = idf(itemFeatures.map(\.words))
     let countryIDF = idf(itemFeatures.map(\.countries)), nameIDF = idf(itemFeatures.map(\.names))
