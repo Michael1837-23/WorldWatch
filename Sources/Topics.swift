@@ -12,6 +12,8 @@ struct FollowTopic: Codable, Identifiable, Equatable, Hashable, Sendable {
     var aliases: [String]
     /// Issue topics also match when every group has a hit, e.g. 台湾 together with one of 大陆、解放军、北京.
     var pairs: [[String]] = []
+    /// Phrases removed before matching: 苹果日报 is a newspaper, not Apple.
+    var excludes: [String] = []
     /// Google News search queries that fill in coverage for this topic.
     var queryZH: String = ""
     var queryEN: String = ""
@@ -19,8 +21,8 @@ struct FollowTopic: Codable, Identifiable, Equatable, Hashable, Sendable {
     var showTicks = false
     var alerts = true
 
-    init(id: String, name: String, aliases: [String], pairs: [[String]] = [], queryZH: String = "", queryEN: String = "", showTicks: Bool = false, alerts: Bool = true) {
-        self.id = id; self.name = name; self.aliases = aliases; self.pairs = pairs
+    init(id: String, name: String, aliases: [String], pairs: [[String]] = [], excludes: [String] = [], queryZH: String = "", queryEN: String = "", showTicks: Bool = false, alerts: Bool = true) {
+        self.id = id; self.name = name; self.aliases = aliases; self.pairs = pairs; self.excludes = excludes
         self.queryZH = queryZH; self.queryEN = queryEN; self.showTicks = showTicks; self.alerts = alerts
         if self.queryZH.isEmpty || self.queryEN.isEmpty { fillQueries() }
     }
@@ -30,6 +32,7 @@ struct FollowTopic: Codable, Identifiable, Equatable, Hashable, Sendable {
         name = try c.decode(String.self, forKey: .name)
         aliases = try c.decodeIfPresent([String].self, forKey: .aliases) ?? [name]
         pairs = try c.decodeIfPresent([[String]].self, forKey: .pairs) ?? []
+        excludes = try c.decodeIfPresent([String].self, forKey: .excludes) ?? []
         queryZH = try c.decodeIfPresent(String.self, forKey: .queryZH) ?? ""
         queryEN = try c.decodeIfPresent(String.self, forKey: .queryEN) ?? ""
         showTicks = try c.decodeIfPresent(Bool.self, forKey: .showTicks) ?? false
@@ -62,10 +65,30 @@ struct FollowTopic: Codable, Identifiable, Equatable, Hashable, Sendable {
                     queryZH: "乌克兰 OR 俄乌", queryEN: "Ukraine"),
         FollowTopic(id: "taiwan", name: "台海两岸", aliases: ["两岸", "台海", "台湾海峡", "国台办", "赖清德", "台独", "Taiwan Strait", "cross-strait", "Lai Ching-te"],
                     pairs: [["台湾", "Taiwan", "Taiwanese"], ["大陆", "解放军", "北京", "中国", "中共", "PLA", "Beijing", "China", "Chinese"]],
-                    queryZH: "台海 OR 两岸 OR 国台办", queryEN: "Taiwan China OR \"Taiwan Strait\"")
+                    queryZH: "台海 OR 两岸 OR 国台办", queryEN: "Taiwan China OR \"Taiwan Strait\""),
+        // 奥特曼 alone is also Ultraman, so it needs company context.
+        FollowTopic(id: "openai", name: "OpenAI", aliases: ["OpenAI", "ChatGPT", "Sam Altman", "Altman", "奥尔特曼", "阿尔特曼"],
+                    pairs: [["奥特曼"], ["山姆", "萨姆", "CEO", "首席执行官", "GPT", "AGI", "大模型", "微软", "马斯克", "估值", "融资", "IPO"]],
+                    queryZH: "OpenAI OR ChatGPT", queryEN: "OpenAI OR \"Sam Altman\""),
+        // Bare 苹果 is also the fruit and 库克 also the Cook Islands: either needs the other or a company word.
+        FollowTopic(id: "apple", name: "苹果", aliases: ["苹果公司", "苹果手机", "Apple", "iPhone", "iPad", "MacBook", "Vision Pro", "App Store", "Tim Cook", "蒂姆·库克"],
+                    pairs: [["苹果"], ["库克", "iPhone", "iPad", "Mac", "iOS", "Siri", "CEO", "首席执行官", "AI", "芯片", "手机", "折叠屏", "应用商店", "市值", "股价", "美股",
+                                       "财报", "营收", "发布会", "欧盟", "反垄断", "罚款", "关税", "供应链", "富士康", "特朗普", "微软", "谷歌", "英伟达", "三星", "华为"]],
+                    excludes: ["苹果日报", "Apple Daily", "Big Apple", "Apple TV", "Apple Music"],
+                    queryZH: "苹果公司 OR iPhone OR 库克", queryEN: "Apple OR iPhone OR \"Tim Cook\"")
     ]
     static let limit = 20
 
+    /// Presets added after a list was saved, appended once unless the list already covers them (same id, or a name or alias in common).
+    static func adding(_ ids: [String], to list: [FollowTopic]) -> [FollowTopic] {
+        var list = list
+        for preset in presets where ids.contains(preset.id) && list.count < limit {
+            let words = Set(([preset.name] + preset.aliases).map(topicMatchText))
+            guard !list.contains(where: { $0.id == preset.id || !words.isDisjoint(with: ([$0.name] + $0.aliases).map(topicMatchText)) }) else { continue }
+            list.append(preset)
+        }
+        return list
+    }
     static func read(from defaults: UserDefaults) -> [FollowTopic] {
         guard let data = defaults.data(forKey: "followTopics"), let topics = try? JSONDecoder().decode([FollowTopic].self, from: data) else { return presets }
         return topics
@@ -105,11 +128,15 @@ struct TopicMatcher: @unchecked Sendable {
             return exact.contains { $0.firstMatch(in: original, range: o) != nil } || folded.contains { $0.firstMatch(in: text, range: f) != nil }
         }
     }
-    private let compiled: [(id: String, any: Terms, pairs: [Terms])]
+    private let compiled: [(id: String, any: Terms, pairs: [Terms], excludes: [(original: String, folded: String)])]
     let topics: [FollowTopic]
     init(_ topics: [FollowTopic]) {
         self.topics = topics
-        compiled = topics.map { ($0.id, Terms($0.aliases), $0.pairs.map(Terms.init).filter { !$0.isEmpty }) }
+        compiled = topics.map { topic in
+            let excludes = topic.excludes.map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
+                .map { ($0.applyingTransform(StringTransform("Traditional-Simplified"), reverse: false) ?? $0, topicMatchText($0)) }
+            return (topic.id, Terms(topic.aliases), topic.pairs.map(Terms.init).filter { !$0.isEmpty }, excludes)
+        }
     }
     var isEmpty: Bool { topics.isEmpty }
     /// Ids of the topics any of the texts mention, in topic order.
@@ -118,7 +145,12 @@ struct TopicMatcher: @unchecked Sendable {
         let pairs = texts.map { ($0.applyingTransform(StringTransform("Traditional-Simplified"), reverse: false) ?? $0, topicMatchText($0)) }
         return compiled.filter { topic in
             pairs.contains { original, folded in
-                topic.any.hit(original: original, folded: folded) || (!topic.pairs.isEmpty && topic.pairs.allSatisfy { $0.hit(original: original, folded: folded) })
+                var original = original, folded = folded
+                for phrase in topic.excludes {
+                    original = original.replacingOccurrences(of: phrase.original, with: " ", options: .caseInsensitive)
+                    folded = folded.replacingOccurrences(of: phrase.folded, with: " ")
+                }
+                return topic.any.hit(original: original, folded: folded) || (!topic.pairs.isEmpty && topic.pairs.allSatisfy { $0.hit(original: original, folded: folded) })
             }
         }.map(\.id)
     }
@@ -224,7 +256,11 @@ private let primaryOutletNames = [
 private let lowOutletNames = [
     "benzinga", "motley fool", "fool.com", "24/7 wall", "tradingview", "investing.com", "英为财情", "seeking alpha", "zacks", "moomoo", "富途", "老虎证券",
     "雪球", "搜狐", "sohu", "百家号", "网易号", "头条号", "东方财富", "股吧", "insider monkey", "marketbeat", "gurufocus", "tipranks", "stocktwits",
-    "social news xyz", "coincentral", "ad hoc news", "finimize", "simply wall", "trefis", "nasdaq.com", "investorplace", "gobankingrates"
+    "social news xyz", "coincentral", "ad hoc news", "finimize", "simply wall", "trefis", "nasdaq.com", "investorplace", "gobankingrates",
+    // Gadget tips, deals and fan blogs: real Apple or Nvidia news also reaches the wires, these add how-tos and rumors.
+    "9to5mac", "9to5google", "appleinsider", "macrumors", "imore", "cult of mac", "applemagazine", "apple world today", "macdailynews", "idropnews",
+    "lifehacker", "man of many", "bgr", "tom's guide", "tom’s guide", "phonearena", "gsmarena", "wccftech", "notebookcheck", "android authority",
+    "android central", "slashgear", "pocket-lint", "tvline", "decider", "biggo", "fxleaders"
 ]
 
 func outletTier(publisher: String?, sourceID: String) -> OutletTier {
@@ -240,24 +276,24 @@ func outletTier(publisher: String?, sourceID: String) -> OutletTier {
 
 func outletTier(_ event: WorldEvent) -> OutletTier { outletTier(publisher: event.publisher, sourceID: event.sourceID) }
 
-private let tickPattern = try! NSRegularExpression(pattern: #"(?:涨|跌|升|降|涨幅|跌幅|反弹|回落|拉升|下挫|走高|走低)\s*(?:超|逾|近|约|达)?\s*\d+(?:\.\d+)?\s*%|高开|低开|股指|收高|收低|跳水|现报|盘前|盘后|盘中|收涨|收跌|收盘|开盘|日内|涨停|跌停|市值(?:蒸发|增加|突破|跌破|超过)|股价|评级|目标价|\b(?:shares?|stocks?|futures|nasdaq|s&p)\b[^.]{0,40}\b(?:rise|rises|rose|fall|falls|fell|jump|jumps|jumped|slide|slides|slid|drop|drops|dropped|surge|surges|surged|tumble|tumbles|tumbled|climb|climbs|climbed|sink|sinks|sank|gain|gains|gained|rally|rallies|rallied|plunge|plunges|plunged|soar|soars|soared|slump|slumps|slumped)\b|\bprice target\b|\b(?:buy|sell|hold|overweight|underweight) rating\b|\bstock (?:price|forecast|prediction)\b|\bshould you buy\b|\bpremarket\b|\bafter[- ]hours\b"#, options: .caseInsensitive)
+private let tickPattern = try! NSRegularExpression(pattern: #"(?:涨|跌|升|降|涨幅|跌幅|反弹|回落|拉升|下挫|走高|走低)\s*(?:超|逾|近|约|达)?\s*\d+(?:\.\d+)?\s*%|高开|低开|股指|收高|收低|跳水|现报|盘前|盘后|盘中|收涨|收跌|收盘|开盘|日内|涨停|跌停|市值(?:蒸发|增加|突破|跌破|超过)|股价|评级|目标价|三大(?:股)?指数|美股收盘|芯片股|科技股|概念股|半导体股|权重股|单?周(?:涨|跌)幅|(?:全线|集体)(?:上涨|下跌|大涨|大跌|走高|走低)|\b(?:shares?|stocks?|futures|nasdaq|s&p)\b[^.]{0,40}\b(?:rise|rises|rose|fall|falls|fell|jump|jumps|jumped|slide|slides|slid|drop|drops|dropped|surge|surges|surged|tumble|tumbles|tumbled|climb|climbs|climbed|sink|sinks|sank|gain|gains|gained|rally|rallies|rallied|plunge|plunges|plunged|soar|soars|soared|slump|slumps|slumped)\b|\bprice target\b|\bintraday\b|\ball-time highs?\b|\b(?:buy|sell|hold|overweight|underweight) rating\b|\bstock (?:price|forecast|prediction)\b|\bshould you buy\b|\bpremarket\b|\bafter[- ]hours\b"#, options: .caseInsensitive)
 
 /// Index and share-price moves, ratings and price targets: market noise rather than news about the topic.
 func isMarketTick(_ event: WorldEvent) -> Bool {
     [event.title, event.translatedTitle].compactMap { $0 }.contains { tickPattern.firstMatch(in: $0, range: NSRange($0.startIndex..., in: $0)) != nil }
 }
 
-private let rumorPattern = try! NSRegularExpression(pattern: #"或将|或于|或在|传出|传闻|市场消息|市场传闻|据悉|消息人士|知情人士|据报道|报道称|据称|网传|\breportedly\b|\bsources? (?:say|said|says)\b|\bpeople familiar\b|\bsaid to\b|\bin talks\b|\bweighs?\b|\bconsidering\b|\bcould announce\b|\bmay announce\b|\brumou?rs?\b|[:：]\s*report$|\breport says\b"#, options: .caseInsensitive)
+private let rumorPattern = try! NSRegularExpression(pattern: #"或将|或于|或在|传出|传闻|市场消息|市场传闻|据悉|消息人士|知情人士|据报道|报道称|据称|网传|爆料|古尔曼|郭明錤|郭明𫓹|\bGurman\b|Ming-Chi Kuo|\breportedly\b|\bsources? (?:say|said|says)\b|\bpeople familiar\b|\bsaid to\b|\bin talks\b|\bweighs?\b|\bconsidering\b|\bcould announce\b|\bmay announce\b|\brumou?rs?\b|[:：]\s*report$|\breport says\b"#, options: .caseInsensitive)
 
 /// Unconfirmed wording: talks, sources, "或将". Shown with a 「据报道」 label until two primary outlets carry the story.
 func isRumorHeadline(_ event: WorldEvent) -> Bool {
     [event.title, event.translatedTitle].compactMap { $0 }.contains { rumorPattern.firstMatch(in: $0, range: NSRange($0.startIndex..., in: $0)) != nil }
 }
 
-private let softNewsPattern = try! NSRegularExpression(pattern: #"农博会|花博会|博览会|展销|巡展|作品展|文化节|艺术节|音乐节|联谊|研学|夏令营|冬令营|网友共创|共创视频|见面会|宣讲|侧记|随笔|综述|述评|社评|网评|时评|快评|锐评|评论员|新闻会客厅|学习贯彻|主题教育|党性|交流活动|座谈会|推介会|年会|周报|周刊|速览|早知道|晨报|晚报|午报|深一度|能否|会否|何去何从|意味着什么|怎么看|^[^丨｜|]{0,8}(?:观察|评论|视点|聚焦|调查|解码|读懂)[丨｜|]"#)
+private let softNewsPattern = try! NSRegularExpression(pattern: #"农博会|花博会|博览会|展销|巡展|作品展|文化节|艺术节|音乐节|联谊|研学|夏令营|冬令营|网友共创|共创视频|见面会|宣讲|侧记|随笔|综述|述评|社评|网评|时评|快评|锐评|评论员|新闻会客厅|学习贯彻|主题教育|党性|交流活动|座谈会|推介会|年会|周报|周刊|速览|早知道|晨报|晚报|午报|深一度|横评|评测|测评|上手|开箱|怎么选|如何选|选购|攻略|教程|小技巧|好物|种草|测试版|以旧换新|划不划算|值不值得?|配置推荐|分析[:：]|影响分析|深度分析|解读|能否|会否|何去何从|意味着什么|怎么看|^[^丨｜|]{0,8}(?:观察|评论|视点|聚焦|调查|解码|读懂)[丨｜|]"#)
 
 // Analysis and features in English: listicles, explainers, two-sentence feature headlines ("… knew. Now some wonder …").
-private let featurePattern = try! NSRegularExpression(pattern: #"\b(?:names to watch|what to (?:know|watch|expect)|things to know|here'?s (?:what|why|how)|the rise and fall|what (?:we|you) know|explained|analysis|opinion|takeaways|lessons from|comes back to bite|a (?:tougher|bigger) test)\b|^\d+ (?:names|things|ways|reasons|takeaways|questions|charts|people)\b"#, options: .caseInsensitive)
+private let featurePattern = try! NSRegularExpression(pattern: #"\b(?:names to watch|what to (?:know|watch|expect)|things to know|here'?s (?:what|why|how|the fix)|the rise and fall|what (?:we|you) know|explained|analysis|opinion|takeaways|lessons from|comes back to bite|a (?:tougher|bigger) test|tips (?:and|&) tricks|hands-on|first look|unboxing|buying guide|stream it or skip it|recap|premiere|trailer|should know|gift guide|gift ideas|holiday gift|gift to beat|black friday|cyber monday|prime day|beta)\b|\bhas an? [\w' -]{1,30} problem\b|^how to\b|\b(?:ios|ipados|macos|tvos|watchos|visionos) \d+\.\d+|^\d+ (?:names|things|ways|reasons|takeaways|questions|charts|people|tips|tricks|features|apps|deals)\b"#, options: .caseInsensitive)
 private let twoSentencePattern = try! NSRegularExpression(pattern: #"[a-z]{2,}[.!?]\s+[A-Z][a-z]"#)
 // Roundups and newsletters ("A; B; C"), seminars and "交出答卷" style pieces.
 private let chineseRoundupPattern = try! NSRegularExpression(pattern: #"梳理|盘点|回顾|复盘|一文|细数|全解析|时间线|研讨会|交流会|恳谈会|答卷|[;；][^;；]+[;；]"#)
@@ -345,8 +381,8 @@ func followAnalysis(_ result: StoryResult, topics: [FollowTopic], level: MajorLe
         guard !reports.isEmpty else { continue }
         let news = reports.filter { !isMarketTick($0) }
         let tickOnly = news.isEmpty
-        // A topic belongs to the story when two outlets mention it, or at least half of them do:
-        // one stray headline in a large cluster should not tag the whole story.
+        // A topic belongs to the story when at least half of the outlets mention it, or two and a quarter of them do:
+        // a couple of stray headlines in a large cluster should not tag the whole story.
         var support: [String: Set<String>] = [:]
         var memberTopics: [String: [String]] = [:]
         for member in members {
@@ -356,7 +392,7 @@ func followAnalysis(_ result: StoryResult, topics: [FollowTopic], level: MajorLe
         }
         let outletCount = max(1, story.outlets.count)
         let topicIDs = topics.map(\.id).filter { id in
-            guard let outlets = support[id], outlets.count >= 2 || Double(outlets.count) * 2 >= Double(outletCount) else { return false }
+            guard let outlets = support[id], Double(outlets.count) * 2 >= Double(outletCount) || (outlets.count >= 2 && outlets.count * 4 >= outletCount) else { return false }
             return !tickOnly || topicByID[id]?.showTicks == true
         }
         let primary = Set(members.filter { outletTier($0) == .primary }.compactMap(storyOutlet))

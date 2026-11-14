@@ -57,6 +57,8 @@ struct CachedFeed: Codable {
     // 提醒 (2.11)
     @Published var alertSettings = AlertSettings.selected
     @Published var notificationStatus = "尚未请求系统通知权限"
+    /// While macOS denies notifications, alerts are only recorded, so they neither pile up nor use the hourly and daily caps.
+    private var notificationsDenied = false
     private var alertLedger = AlertLedger()
     /// Stories already in the view when the app starts, or arriving with the first round of topic searches, are recorded silently.
     private let alertWarmUntil = Date().addingTimeInterval(8 * 60)
@@ -112,6 +114,7 @@ struct CachedFeed: Codable {
     private let cacheURL = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0].appendingPathComponent("WorldWatch/feeds.json")
     init() {
         migrateToFollowedView()
+        migrateNewPresets()
         filter = Self.scope(for: widgetDisplayMode)
         if let data = try? Data(contentsOf: alertLedgerURL), let ledger = try? JSONDecoder().decode(AlertLedger.self, from: data) { alertLedger = ledger }
         if let data = try? Data(contentsOf: topicHistoryURL), let history = try? JSONDecoder().decode([TopicHistoryItem].self, from: data) { topicHistory = mergedTopicHistory(history, rows: []) }
@@ -151,6 +154,15 @@ struct CachedFeed: Codable {
         NewsDisplayMode.selected = .followed
         UserDefaults.standard.set(true, forKey: "followedViewV210")
     }
+    /// 2.13: OpenAI and 苹果 join the presets and are added once to a saved list.
+    private func migrateNewPresets() {
+        guard !UserDefaults.standard.bool(forKey: "topicsV213") else { return }
+        let list = FollowTopic.adding(["openai", "apple"], to: FollowTopic.selected)
+        if list != FollowTopic.selected { FollowTopic.selected = list }
+        topics = list
+        topicMatcher = TopicMatcher(list)
+        UserDefaults.standard.set(true, forKey: "topicsV213")
+    }
     /// The followed view from the current stories, off the main thread; used when topics or the gate change.
     func refollow() {
         guard let stories else { return }
@@ -181,8 +193,9 @@ struct CachedFeed: Codable {
         }
     }
     private func deliverAlerts(_ rows: [WorldEvent]) {
+        refreshNotificationStatus()
         var ledger = alertLedger
-        if Date() < alertWarmUntil { ledger.seeded = false }
+        if Date() < alertWarmUntil || notificationsDenied { ledger.seeded = false }
         let decision = alertDecision(rows: rows, topics: topics, settings: alertSettings, ledger: ledger)
         alertLedger = decision.ledger
         do {
@@ -212,14 +225,27 @@ struct CachedFeed: Codable {
     }
     func requestNotificationPermission() {
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in
-            UNUserNotificationCenter.current().getNotificationSettings { settings in
-                let status: String
-                switch settings.authorizationStatus {
-                case .authorized, .provisional: status = settings.alertSetting == .enabled ? "系统通知已允许" : "系统通知已允许，但横幅被关闭"
-                case .denied: status = "系统通知被拒绝：请在系统设置 → 通知 → 世界动态中开启"
-                default: status = "尚未决定是否允许系统通知"
+            Task { @MainActor in self.refreshNotificationStatus() }
+        }
+    }
+    /// Re-read the system setting; the user may allow notifications in System Settings at any time.
+    func refreshNotificationStatus() {
+        UNUserNotificationCenter.current().getNotificationSettings { settings in
+            let status: String
+            let denied = settings.authorizationStatus == .denied
+            switch settings.authorizationStatus {
+            case .authorized, .provisional: status = settings.alertSetting == .enabled ? "系统通知已允许" : "系统通知已允许，但横幅被关闭"
+            case .denied: status = "系统通知被拒绝：请在系统设置 → 通知 → 世界动态中开启「允许通知」"
+            default: status = "尚未决定是否允许系统通知"
+            }
+            Task { @MainActor in
+                // Alerts counted while denied never reached the user: give the caps back once allowed.
+                if self.notificationsDenied && !denied {
+                    self.alertLedger.delivered = []
+                    self.alertLedger.byTopic = [:]
                 }
-                Task { @MainActor in self.notificationStatus = status }
+                self.notificationsDenied = denied
+                self.notificationStatus = status
             }
         }
     }
@@ -1110,12 +1136,12 @@ struct FollowTopicsSection: View {
             }
             VStack(alignment: .leading, spacing: 6) {
                 Text("添加关注对象").fontWeight(.medium)
-                TextField("名称，例如 OpenAI", text: $newName).textFieldStyle(.roundedBorder).onSubmit(add)
-                TextField("别名，用逗号分隔，例如 OpenAI, 奥特曼, Sam Altman", text: $newAliases).textFieldStyle(.roundedBorder).onSubmit(add)
+                TextField("名称，例如 特斯拉", text: $newName).textFieldStyle(.roundedBorder).onSubmit(add)
+                TextField("别名，用逗号分隔，例如 特斯拉, Tesla, Cybertruck", text: $newAliases).textFieldStyle(.roundedBorder).onSubmit(add)
                 HStack {
                     Button("添加", action: add).disabled(newName.trimmingCharacters(in: .whitespaces).isEmpty || store.topics.count >= FollowTopic.limit)
                     Spacer()
-                    Button("恢复预置的 7 个") { store.setTopics(FollowTopic.presets) }
+                    Button("恢复预置的 \(FollowTopic.presets.count) 个") { store.setTopics(FollowTopic.presets) }
                 }
             }
             VStack(alignment: .leading, spacing: 6) {

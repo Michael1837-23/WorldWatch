@@ -39,6 +39,25 @@ func topicChecks() throws {
     require(ids("SpaceX to attempt first Starship recovery on land") == ["spacex"], "SpaceX")
     require(topicLabel(["musk", "nvidia", "trump"], topics: topics) == "马斯克、英伟达等" && topicLabel(["gone"], topics: topics) == nil, "标签与已删除对象")
 
+    // 2.13 presets, and the look-alikes they must not catch.
+    require(ids("OpenAI launches ChatGPT Wallet, allowing its AI agents to make purchases") == ["openai"], "OpenAI 与 ChatGPT")
+    require(ids("萨姆·奥特曼：GPT-6 明年发布").contains("openai") && ids("马斯克诉奥特曼案开庭").contains("openai"), "奥特曼带公司语境")
+    require(!ids("新版奥特曼电影票房破亿").contains("openai"), "奥特曼动画不算 OpenAI")
+    require(ids("Trump floats Apple chairman Tim Cook as Jensen Huang’s successor") == ["trump", "nvidia", "apple"], "Apple 与 Tim Cook")
+    require(ids("特朗普：唯有苹果的库克能接替黄仁勋") == ["trump", "nvidia", "apple"], "苹果与库克共现")
+    require(ids("蘋果發布會定檔 新機亮相") == ["apple"], "繁体苹果与发布会")
+    require(!ids("库克群岛与中国签署深海采矿合作").contains("apple"), "库克群岛不算苹果")
+    require(!ids("烟台苹果丰收 果农喜迎好价钱").contains("apple"), "水果不算苹果")
+    require(!ids("黎智英案：苹果日报前高层出庭 涉及罚款").contains("apple") && !ids("Apple Daily founder Jimmy Lai sentenced").contains("apple"), "苹果日报不算苹果")
+    require(!ids("Pineapple prices soar in Big Apple markets").contains("apple"), "Pineapple 与 Big Apple")
+    let saved = Array(topics.prefix(7))
+    require(FollowTopic.adding(["openai", "apple"], to: saved).map(\.id) == saved.map(\.id) + ["openai", "apple"], "旧清单补上 OpenAI 与苹果")
+    let withKeyword = saved + [FollowTopic(id: "kw-1", name: "openai", aliases: ["openai"])]
+    require(FollowTopic.adding(["openai", "apple"], to: withKeyword).map(\.id) == withKeyword.map(\.id) + ["apple"], "已有同名关注词时不重复添加")
+    require(FollowTopic.adding(["openai"], to: FollowTopic.adding(["openai"], to: saved)).filter { $0.id == "openai" }.count == 1, "重复执行不重复添加")
+    let full = (0..<FollowTopic.limit).map { FollowTopic(id: "t\($0)", name: "对象\($0)", aliases: ["对象\($0)"]) }
+    require(FollowTopic.adding(["openai"], to: full).count == FollowTopic.limit, "满 20 个不再添加")
+
     var custom = FollowTopic(id: "openai", name: "OpenAI", aliases: ["OpenAI", "奥特曼", "Sam Altman"])
     require(custom.queryZH == "奥特曼" && custom.queryEN == "OpenAI OR \"Sam Altman\"", "自定义对象的搜索词：\(custom.queryZH) / \(custom.queryEN)")
     custom.aliases = ["OpenAI"]; custom.fillQueries()
@@ -50,7 +69,7 @@ func topicChecks() throws {
 
     // Extra sources: two searches per topic, known to lookups but absent from the widget's source list.
     let searches = NewsSource.topicSources(topics)
-    require(searches.count == 14 && searches.allSatisfy { $0.aggregator && $0.url.host == "news.google.com" && $0.url.absoluteString.contains("when%3A1d") }, "每个对象两个搜索源")
+    require(searches.count == topics.count * 2 && searches.allSatisfy { $0.aggregator && $0.url.host == "news.google.com" && $0.url.absoluteString.contains("when%3A1d") }, "每个对象两个搜索源")
     require(NewsSource.find("topic-musk-zh")?.language == "zh" && NewsSource.find("topic-musk-en")?.language == "en" && isChineseSource("topic-taiwan-zh"), "搜索源语言")
     require(NewsSource.find("sina-7x24")?.language == "zh" && !NewsSource.all.contains { $0.isExtra }, "新浪与搜索源不在组件来源里")
     require(isChineseSource("sina-7x24") && !isChineseSource("topic-musk-en"), "新浪快讯按中文来源处理")
@@ -214,6 +233,35 @@ func topicChecks() throws {
     require(isSoftNews(item("f-nl", "160th anniversary of Sun Yat-sen’s birth; US-China; Nvidia fallout; South Korea", now: now)) && isSoftNews(item("f-sem", "2026年两岸科技创新融合发展研讨会在厦门开幕", now: now)), "简报与研讨会")
     require(isSoftNews(item("f-cn", "放行对华H200芯片出口——特朗普和黄仁勋近两年交往全梳理", now: now)) && !isSoftNews(item("f-us", "U.S. Navy deploys carrier to Taiwan Strait", now: now)), "梳理稿与缩写不误判")
 
+    // 2.13: consumer-tech pieces, index and sector moves, tipsters and gadget blogs.
+    for title in ["5 Apple HomeView Tips and Tricks That Will Upgrade Your Smart Home", "Early Black Friday Apple Deals: Watch Ultra 4, MacBook Air, More",
+                  "The new Apple TV has a YouTube problem", "tvOS 27.2.1 launching soon with Siri AI for older Apple TV 4K models",
+                  "YouTube App Not Working on Your New Apple TV? Here's the Fix", "Five Hacks Every Apple Watch Series 12 User Should Know"] {
+        require(isSoftNews(item("ct-" + title, title, now: now)), "数码软文：\(title)")
+    }
+    require(isSoftNews(item("ct-cn1", "三款人像旗舰横评：OPPO Find X10、vivo X500、iPhone 18 Pro Max 谁的人像直出更自然", now: now))
+            && isSoftNews(item("ct-cn2", "年轻人拍照手机怎么选：荣耀Magic9系列、iPhone与小米", now: now)), "横评与选购")
+    require(!isSoftNews(item("ct-ok1", "Supreme Court to review Trump's asylum ban", now: now)) && !isSoftNews(item("ct-ok2", "Trump touts trade deals with Japan and Korea", now: now))
+            && !isSoftNews(item("ct-ok3", "Chinese Premier Li Qiang meets Musk in Beijing", now: now)) && !isSoftNews(item("ct-ok4", "Iran hacks US water utilities, officials say", now: now)), "review、deals、Premier、hacks 不误判")
+    require(isMarketTick(item("ct-t1", "Apple hits fresh all-time intraday highs on stable iPhone demand", now: now))
+            && isMarketTick(item("ct-t2", "英伟达震荡未阻美股反弹，三大指数录得8月初以来最大单周涨幅", now: now)) && isMarketTick(item("ct-t3", "苹果，创新高！芯片股，又大跌", now: now)), "指数与板块行情")
+    require(!isMarketTick(item("ct-t4", "Taiwan's defense budget hits record high", now: now)), "record high 不算行情")
+    require(isRumorHeadline(item("ct-r1", "配A20芯片：古尔曼重申苹果iPhone 18/18e明年春季将登场", now: now)), "古尔曼爆料标「据报道」")
+    require(outletTier(publisher: "9to5Mac", sourceID: "topic-apple-en") == .low && outletTier(publisher: "Decider", sourceID: "topic-apple-en") == .low
+            && outletTier(publisher: "The Verge", sourceID: "topic-apple-en") == .primary, "数码博客是三档，The Verge 仍是一档")
+    require(!ids("12 12 12 Premiere Recap: Anthony Mackie's Apple TV+ heist thriller").contains("apple") && ids("EU fines Apple over Apple TV bundling").contains("apple"), "Apple TV 节目不算苹果")
+    // A large story needs a quarter of its outlets (or half) to mention a topic.
+    func courtStory(appleMentions: Int) -> FollowAnalysis {
+        var court = StoryResult()
+        let members = (0..<12).map { item("q\($0)", $0 < appleMentions ? "Epic asks Supreme Court to uphold contempt ruling against Apple" : "Supreme Court to weigh Trump asylum ban",
+                                           publisher: $0 == 0 ? "Reuters" : "Court Outlet \($0)", minutesAgo: 60, now: now) }
+        for member in members { court.events[member.id] = member }
+        court.stories = [story(members, outlets: members.map { $0.publisher! }, now: now)]
+        return followAnalysis(court, topics: topics, now: now)
+    }
+    require(courtStory(appleMentions: 2).rows.first?.followTopics == ["trump"], "12 家里 2 家提到苹果，不算苹果")
+    require(courtStory(appleMentions: 3).rows.first?.followTopics == ["trump", "apple"], "12 家里 3 家提到苹果，算苹果")
+
     // Topic history and topic pages.
     var old = item("old", "Older SpaceX story", publisher: "Reuters", minutesAgo: 5 * 1440, now: now); old.storyID = "old"; old.followTopics = ["spacex"]
     let ancient = item("ancient", "Ancient SpaceX story", publisher: "Reuters", minutesAgo: 15 * 1440, now: now)
@@ -251,16 +299,47 @@ private extension WorldEvent {
 
 /// `zsh test.command --follow`: fetch the topic searches and 新浪 7×24 live, merge them into a copy of the app's
 /// story index, and print the followed view at each big-event level. Read-only for the app's files.
+/// Topics the presets point to, measured with `--follow --local --candidates` before suggesting them.
+let candidateTopics: [FollowTopic] = [
+    FollowTopic(id: "c-tesla", name: "特斯拉", aliases: ["特斯拉", "Tesla", "Cybertruck", "Robotaxi"]),
+    FollowTopic(id: "c-xai", name: "xAI", aliases: ["xAI", "Grok"]),
+    FollowTopic(id: "c-anthropic", name: "Anthropic", aliases: ["Anthropic"]),
+    FollowTopic(id: "c-google", name: "谷歌", aliases: ["谷歌", "Google", "Alphabet", "Gemini", "DeepMind"]),
+    FollowTopic(id: "c-microsoft", name: "微软", aliases: ["微软", "Microsoft"]),
+    FollowTopic(id: "c-meta", name: "Meta", aliases: ["Meta", "扎克伯格", "Zuckerberg"]),
+    FollowTopic(id: "c-amazon", name: "亚马逊", aliases: ["亚马逊", "Amazon"]),
+    FollowTopic(id: "c-tsmc", name: "台积电", aliases: ["台积电", "TSMC"]),
+    FollowTopic(id: "c-huawei", name: "华为", aliases: ["华为", "Huawei", "任正非", "鸿蒙"]),
+    FollowTopic(id: "c-deepseek", name: "DeepSeek", aliases: ["DeepSeek", "深度求索"]),
+    FollowTopic(id: "c-chips", name: "芯片管制", aliases: ["出口管制", "实体清单", "export controls", "export curbs", "Entity List"]),
+    FollowTopic(id: "c-fed", name: "美联储", aliases: ["美联储", "Federal Reserve", "FOMC"]),
+    FollowTopic(id: "c-tariffs", name: "关税", aliases: ["关税", "贸易战", "tariff", "tariffs", "trade war"]),
+    FollowTopic(id: "c-mideast", name: "中东局势", aliases: ["以色列", "伊朗", "加沙", "哈马斯", "真主党", "胡塞", "内塔尼亚胡",
+                                                       "Israel", "Israeli", "Iran", "Iranian", "Gaza", "Hamas", "Hezbollah", "Houthi", "Houthis", "Netanyahu"]),
+    FollowTopic(id: "c-japan", name: "中日关系", aliases: ["中日", "日中", "高市早苗", "Takaichi"],
+                pairs: [["日本", "日方", "东京", "Japan", "Japanese", "Tokyo"], ["中国", "中方", "北京", "解放军", "China", "Chinese", "Beijing"]]),
+    FollowTopic(id: "c-korea", name: "朝鲜半岛", aliases: ["朝鲜", "金正恩", "North Korea", "Pyongyang", "Kim Jong Un"]),
+    FollowTopic(id: "c-russia", name: "普京与俄罗斯", aliases: ["普京", "克里姆林宫", "Putin", "Kremlin"]),
+    FollowTopic(id: "c-eu", name: "欧盟", aliases: ["欧盟", "European Union", "EU", "冯德莱恩", "von der Leyen"]),
+    FollowTopic(id: "c-venezuela", name: "委内瑞拉", aliases: ["委内瑞拉", "Venezuela", "Venezuelan", "马杜罗", "Maduro"]),
+    FollowTopic(id: "c-crypto", name: "比特币", aliases: ["比特币", "Bitcoin", "加密货币", "crypto"])
+]
+
 func followProbe() async throws {
-    let indexURL = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/WorldWatch/story-index.json")
+    func argument(_ flag: String) -> String? { CommandLine.arguments.firstIndex(of: flag).flatMap { CommandLine.arguments.count > $0 + 1 ? CommandLine.arguments[$0 + 1] : nil } }
+    let indexURL = argument("--index").map { URL(fileURLWithPath: $0) } ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support/WorldWatch/story-index.json")
     var index = (try? JSONDecoder().decode([String: StoryEntry].self, from: Data(contentsOf: indexURL))) ?? [:]
-    let topics = FollowTopic.presets
+    let candidates = CommandLine.arguments.contains("--candidates")
+    let topics = FollowTopic.presets + (candidates ? candidateTopics : [])
     let matcher = TopicMatcher(topics)
     let started = Date()
+    index = index.filter { outletTier($0.value.event) != .low }   // the app drops these while parsing
     print("本机索引：\(index.count) 条")
     var fetched: [WorldEvent] = []
     let live = !CommandLine.arguments.contains("--local")
-    for source in live ? NewsSource.topicSources(topics) + [NewsSource.sina] : [] {
+    // --search c-tesla,c-mideast also fetches those candidates' searches, to see what following them would bring.
+    let searched = Set((argument("--search") ?? "").split(separator: ",").map(String.init))
+    for source in live ? NewsSource.topicSources(FollowTopic.presets + candidateTopics.filter { searched.contains($0.id) }) + [NewsSource.sina] : [] {
         do {
             var items = try await fetchSource(source)
             if source.id == NewsSource.sina.id { items = items.filter { !matcher.topicIDs($0).isEmpty && !isMarketTick($0) } }
@@ -270,10 +349,23 @@ func followProbe() async throws {
         try await Task.sleep(nanoseconds: 700_000_000)
     }
     let now = Date()
-    index = updatedStoryIndex(index, with: fetched, now: now) { $0.sourceID.hasPrefix("topic-") || $0.sourceID == NewsSource.sina.id || !matcher.topicIDs($0).isEmpty }
+    index = updatedStoryIndex(index, with: fetched.filter { outletTier($0) != .low }, now: now) { $0.sourceID.hasPrefix("topic-") || $0.sourceID == NewsSource.sina.id || !matcher.topicIDs($0).isEmpty }
+    if let path = argument("--save") { try JSONEncoder().encode(index).write(to: URL(fileURLWithPath: path)); print("索引已存到 \(path)") }
     let clustering = Date()
     let result = buildStories(Array(index.values), now: now)
     print("合并后索引 \(index.count) 条 → \(result.stories.count) 个事件，聚类 \(String(format: "%.1f", Date().timeIntervalSince(clustering))) 秒，抓取 \(String(format: "%.0f", clustering.timeIntervalSince(started))) 秒")
+    if CommandLine.arguments.contains("--support") {
+        // Large stories: how many outlets mention each topic, to calibrate attribution.
+        for story in result.stories where story.outlets.count >= 8 {
+            let members = story.memberIDs.compactMap { result.events[$0] }
+            var support: [String: Set<String>] = [:]
+            for member in members { for id in matcher.topicIDs(member) { support[id, default: []].insert(storyOutlet(member) ?? member.sourceID) } }
+            guard !support.isEmpty else { continue }
+            let lead = members.first { $0.id == story.leadID } ?? members[0]
+            print("  \(story.outlets.count)家 " + support.sorted { $0.value.count > $1.value.count }.map { "\($0.key)=\($0.value.count)" }.joined(separator: " ") + " | \((lead.translatedTitle ?? lead.title).prefix(50))")
+        }
+        return
+    }
     for level in MajorLevel.allCases {
         let follow = followAnalysis(result, topics: topics, level: level, now: now)
         print("\n== 大事门槛「\(level.rawValue)」：关注 \(follow.rows.filter { $0.followTopics != nil }.count) 条，大事 \(follow.majors.count) 条（24 小时）")
@@ -297,7 +389,18 @@ func followProbe() async throws {
                 }
             }
         }
-        if level == .standard {
+        if level == .standard && candidates {
+            let followed = Set(FollowTopic.presets.map(\.id))
+            print("  候选对象（\(searched.isEmpty ? "只用现有来源" : "含补全搜索：" + searched.sorted().joined(separator: "、"))）：")
+            for topic in candidateTopics {
+                let rows = follow.byTopic[topic.id] ?? []
+                let day = rows.filter { now.timeIntervalSince($0.storyFirstDate ?? now) <= 86400 }
+                let fresh = rows.filter { $0.major != true && followed.isDisjoint(with: $0.followTopics ?? []) }
+                print("  \(topic.name)：72 小时 \(rows.count) 件，24 小时 \(day.count) 件，其中大事 \(rows.filter { $0.major == true }.count) 件，原本看不到的 \(fresh.count) 件")
+                for row in fresh.prefix(searched.contains(topic.id) ? 12 : 5) { print("     · [\(row.sourceName)·\(row.storyOutlets?.count ?? 1)家] \(row.displayTitle.prefix(60))") }
+            }
+        }
+        if level == .standard && !candidates {
             for topic in topics {
                 let rows = follow.byTopic[topic.id] ?? []
                 let day = rows.filter { now.timeIntervalSince($0.storyFirstDate ?? now) <= 86400 }
